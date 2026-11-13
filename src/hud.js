@@ -1,4 +1,4 @@
-import { shopCatalog, LOOT_ITEMS, gearNext, TALENT_BRANCHES, TALENTS, talentNext, SKILLS } from './rules.js';
+import { shopCatalog, LOOT_ITEMS, gearNext, TALENT_BRANCHES, TALENTS, talentNext, SKILLS, GUNS } from './rules.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -295,7 +295,13 @@ export class HUD {
       : null;
     const grid = this.el.buyPane;
     grid.textContent = '';
-    for (const good of shopCatalog()) {
+    const carbine = GUNS.carbine;
+    const goods = [
+      { id: 'carbine', kind: 'gun', label: carbine.label, price: 0,
+        desc: `${carbine.damage} 伤害 · ${carbine.rpm} 射速 · ${carbine.magSize} 弹匣 · 射程 ${carbine.range}` },
+      ...shopCatalog(),
+    ];
+    for (const good of goods) {
       const tile = document.createElement('div');
       tile.className = 'tile';
       tile.tabIndex = 0;
@@ -306,7 +312,7 @@ export class HUD {
       let desc = good.desc, kind = '补给', hint = '点击购买', action = null, state = '';
       if (good.kind === 'gun') {
         kind = '武器';
-        price.textContent = good.price;
+        price.textContent = good.price === 0 ? '免费' : good.price;
         const owned = game.ownedGuns.includes(good.id);
         const equipped = game.gunId === good.id;
         if (equipped) { state = '已装备'; hint = '当前装备'; }
@@ -344,8 +350,10 @@ export class HUD {
         st.textContent = state;
         tile.appendChild(st);
       }
-      const tipData = { title: good.label, kind, desc,
-        price: price.textContent === 'MAX' ? '已满级' : price.textContent + ' 金币', hint };
+      const tipPrice = price.textContent === 'MAX' ? '已满级'
+        : price.textContent === '免费' ? '初始装备 · 免费'
+        : price.textContent + ' 金币';
+      const tipData = { title: good.label, kind, desc, price: tipPrice, hint };
       this.bindTile(tile, tipData, action);
       grid.appendChild(tile);
     }
@@ -483,8 +491,8 @@ export class HUD {
     this.el.recordBadge.classList.toggle('hidden', !isRecord);
   }
 
-  fps(v, show) {
+  fps(v, show, extra = '') {
     this.el.fps.style.display = show ? 'block' : 'none';
-    if (show) this.el.fps.textContent = `${v} FPS`;
+    if (show) this.el.fps.textContent = `${v} FPS${extra}`;
   }
 }

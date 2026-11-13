@@ -449,3 +449,8 @@ export function marchImpact(origin, dir, range, targets, isBlocked, groundAt, st
   }
   return { x, y, z, hit: 'none' };
 }
+
+/** 蓄力预警圈与伤害判定的圆心：起手冻结的 skillPos，缺省才回落当前 pos。 */
+export function skillCenter(entity) {
+  return (entity && entity.skillPos) ? entity.skillPos : (entity && entity.pos);
+}

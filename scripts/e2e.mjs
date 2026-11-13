@@ -1,8 +1,15 @@
+// 依赖：devDependency `ws`、本机 Chrome/Chromium（或 CHROME_PATH）。
+// 通过 CDP WebSocket 驱动浏览器；本 PR 不运行本脚本（禁止用 shell 驱动 GUI/CDP）。
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import WebSocket from 'ws';
+import { findChrome, chromeUserDataDir } from './chrome-path.mjs';
 
-const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const CHROME = findChrome();
+if (!CHROME) {
+  console.error('Chrome/Chromium 未找到。请设置环境变量 CHROME_PATH。');
+  process.exit(1);
+}
 const URL = 'http://127.0.0.1:5173/?autostart&bot';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -10,7 +17,7 @@ mkdirSync('shots', { recursive: true });
 const chrome = spawn(CHROME, [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--enable-unsafe-swiftshader',
   '--use-angle=swiftshader', '--hide-scrollbars', '--window-size=800,450',
-  '--remote-debugging-port=9222', '--user-data-dir=D:/Code/swyy/shots/.chrome-profile',
+  '--remote-debugging-port=9222', '--user-data-dir=' + chromeUserDataDir('chrome-profile'),
   'about:blank',
 ], { stdio: 'ignore' });
 

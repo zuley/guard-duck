@@ -10,9 +10,9 @@
 npm install          # 网络受限时可用: npm install --registry=https://mirrors.cloud.tencent.com/npm/
 npm run dev          # http://127.0.0.1:5173
 npm run build        # 产出 dist/
-npm test             # Vitest 数值规则单测（86 项）
-node scripts/e2e.mjs # 无头 Chrome 真实键鼠端到端（96 项，含截图）
-node scripts/playtest.mjs # 测评修复验证（21 项：输入/手柄/弹药/纪录/资源等回归）
+npm test             # Vitest 纯逻辑单测（规则 / 画质 / 资源释放 / Chrome 路径；以当前输出为准）
+node scripts/e2e.mjs # 无头 Chrome 端到端（需 devDependency `ws` + 本机 Chrome，走 CDP；默认不在 PR 中运行）
+node scripts/playtest.mjs # 测评修复验证（同样依赖 ws + Chrome + CDP；默认不在 PR 中运行）
 ```
 
 需要支持 WebGL2 的浏览器。软件渲染环境（SwiftShader 等）会自动降档保证可玩。
@@ -119,16 +119,19 @@ URL 参数：`?autostart` 直接开局、`?bot` 自动战斗演示、`?q=high|me
   暂停菜单音量滑条 + M 键静音，音量持久化；换弹音效节点按实际换弹时长等比排程（手套缩短换弹不再「换完还响」）。
 - **数值**：`src/rules.js` 纯函数（波次规划 / Boss 独立成长曲线 / 每枪距离衰减 / 散布 /
   低弹药掉落兜底 / 金币 / 鸭杂 / 护具三阶加成 / 经验曲线 / 天赋树 / 技能表 / 加成合成 /
-  射线取球面与弹道落点步进），86 项单测覆盖。
+  射线取球面与弹道落点步进）。单测数量以 `npm test` 为准，不要沿用历史「86 项」数字。
 - **资源管理**：鸭子几何体 / 材质全局缓存共享，刷怪 / 切枪 / 重开不再累积 GPU 资源；
-  每只鸭独立的阴影材质随移除释放。输入状态在暂停 / 开关菜单 / 重开时统一清理，
+  每只鸭独立的阴影材质随移除释放。血条与拾取光晕是 Sprite，不得释放 Three 共享几何。
+  子弹本体几何/材质与弹尾几何为游戏级缓存，只释放每发弹独有的拖尾材质。
+  输入状态在暂停 / 开关菜单 / 重开时统一清理，
   切窗、商店空格购买、手柄接入均不会残留成自动走火 / 冲刺。
 
 ## 目录
 
 ```
-src/        游戏代码（engine / world / duck / game / fx / hud / audio / textures / rules）
-tests/      Vitest 单测
-scripts/    e2e.mjs 无头浏览器端到端 · playtest.mjs 测评修复验证
-shots/      e2e 产出的截图（战斗 / 暂停 / 商店 / 天赋树 / 技能栏 / Boss / 护具特写 / 准星落点 / 结算 / 美景 / 鸭脸特写）
+src/        游戏代码（engine / world / duck / game / fx / hud / audio / textures / rules / quality / dispose）
+tests/      Vitest 纯逻辑单测
+scripts/    chrome-path.mjs 跨平台 Chrome 路径 · e2e.mjs / playtest.mjs（CDP，需 ws，默认不跑）
+shots/      e2e 产出的截图目录（本 PR 未运行 e2e，无新截图）
+docs/       审计、更改日志与试玩协议（真实试玩轮数见文档）
 ```

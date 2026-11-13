@@ -1,3 +1,4 @@
+import { MUSIC, musicTargetGain } from './quality.js';
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -256,8 +257,9 @@ export class AudioEngine {
   startMusic() {
     if (!this.ctx || this.musicTimer) return;
     this.musicGain = this.ctx.createGain();
-    this.musicGain.gain.value = 0.5;
+    this.musicGain.gain.value = MUSIC.playGain;
     this.musicGain.connect(this.master);
+    this._musicDucked = false;
     const chords = [
       [130.81, 164.81, 196.00, 261.63],
       [110.00, 130.81, 164.81, 220.00],
@@ -309,9 +311,25 @@ export class AudioEngine {
     if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null; }
     if (this.musicGain) {
       const g = this.musicGain;
-      g.gain.setTargetAtTime(0.0001, this.t, 0.4);
+      g.gain.setTargetAtTime(MUSIC.duckGain, this.t, 0.4);
       setTimeout(() => { try { g.disconnect(); } catch { /* ignore */ } }, 1500);
       this.musicGain = null;
+      this._musicDucked = false;
     }
+  }
+
+  // 暂停/菜单时把 BGM 降到几乎无声，恢复时回到原 playGain；不改 master 音量或静音状态。
+  duckMusic(on) {
+    if (!this.ctx || !this.musicGain) return;
+    this._musicDucked = !!on;
+    const target = on ? MUSIC.duckGain : MUSIC.playGain;
+    this.musicGain.gain.cancelScheduledValues(this.t);
+    this.musicGain.gain.setTargetAtTime(target, this.t, MUSIC.duckTimeConstant);
+  }
+
+  syncMusicToState(state) {
+    const g = musicTargetGain(state);
+    if (g <= 0) return; // 标题/结算由 stopMusic 负责
+    this.duckMusic(g < MUSIC.playGain);
   }
 }

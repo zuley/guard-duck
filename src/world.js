@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { grassMaps, dirtMaps, woodMaps, metalMaps, hayMaps, waterNormalMap, glowSprite } from './textures.js';
 import { mulberry32 } from './rules.js';
+import { QUALITY, resolveQuality } from './quality.js';
 
 export const ARENA = 20.3;
 export const POND = { x: -13, z: -13, r: 6.6 };
@@ -78,6 +79,10 @@ export class World {
     this.uniforms = { uTime: { value: 0 } };
     const rng = mulberry32(2026);
     this.rng = rng;
+    this.preset = resolveQuality(quality, false);
+    this.quality = this.preset.id;
+    this._gPos = new THREE.Vector3();
+    this._gScl = new THREE.Vector3();
 
     this._sky(renderer);
     this._lights();
@@ -166,7 +171,7 @@ export class World {
     this.sun.position.copy(this.sunDir).multiplyScalar(60);
     this.sun.castShadow = true;
     const sc = this.sun.shadow;
-    sc.mapSize.set(this.quality === 'high' ? 2048 : 1024, this.quality === 'high' ? 2048 : 1024);
+    sc.mapSize.set(this.preset.shadow, this.preset.shadow);
     sc.camera.left = -34; sc.camera.right = 34;
     sc.camera.top = 34; sc.camera.bottom = -34;
     sc.camera.near = 10; sc.camera.far = 130;
@@ -496,7 +501,9 @@ export class World {
   }
 
   _grass(rng) {
-    const count = this.quality === 'high' ? 20000 : 9000;
+    // 按最高档容量建池，用 count 切换可见数量，极致↔均衡可逆且不重建。
+    const pool = QUALITY.high.grass;
+    const count = this.preset.grass;
     const geo = new THREE.PlaneGeometry(0.12, 0.4, 1, 3);
     geo.translate(0, 0.2, 0);
     const p = geo.attributes.position;
@@ -520,11 +527,11 @@ export class World {
            transformed.z += w * 0.05 * (position.y / 0.4);
          #endif`);
     };
-    const grass = new THREE.InstancedMesh(geo, mat, count);
+    const grass = new THREE.InstancedMesh(geo, mat, pool);
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     const col = new THREE.Color();
     let placed = 0, guard = 0;
-    while (placed < count && guard++ < count * 30) {
+    while (placed < pool && guard++ < pool * 30) {
       const x = (rng() - 0.5) * 84, z = (rng() - 0.5) * 84;
       const r = Math.hypot(x, z);
       if (Math.hypot(x - POND.x, z - POND.z) < POND.r + 0.9) continue;
@@ -539,17 +546,19 @@ export class World {
       }
       const s = 0.7 + rng() * 0.9;
       e.set(0, rng() * Math.PI, 0); q.setFromEuler(e);
-      m4.compose(new THREE.Vector3(x, groundHeight(x, z), z), q, new THREE.Vector3(s, s, s));
+      m4.compose(this._gPos.set(x, groundHeight(x, z), z), q, this._gScl.set(s, s, s));
       grass.setMatrixAt(placed, m4);
       const tint = 0.7 + rng() * 0.6;
       col.setRGB(0.24 * tint, 0.42 * tint, 0.15 * tint);
       grass.setColorAt(placed, col);
       placed++;
     }
-    grass.count = placed;
+    this.grassPlaced = placed;
+    grass.count = Math.min(placed, count);
     grass.receiveShadow = true;
     grass.instanceMatrix.needsUpdate = true;
     if (grass.instanceColor) grass.instanceColor.needsUpdate = true;
+    this.grassMesh = grass;
     this.scene.add(grass);
 
     // 芦苇
@@ -638,6 +647,22 @@ export class World {
       g.userData = { a: rng() * 6, r: 30 + rng() * 14, h: 22 + rng() * 8, s: 0.05 + rng() * 0.04, w1, w2 };
       this.scene.add(g);
       this.birds.push(g);
+    }
+  }
+
+  setQuality(q, software = false) {
+    this.preset = resolveQuality(q, software);
+    this.quality = this.preset.id;
+    const sz = this.preset.shadow;
+    if (this.sun && (this.sun.shadow.mapSize.x !== sz || this.sun.shadow.mapSize.y !== sz)) {
+      this.sun.shadow.mapSize.set(sz, sz);
+      if (this.sun.shadow.map) {
+        this.sun.shadow.map.dispose();
+        this.sun.shadow.map = null;
+      }
+    }
+    if (this.grassMesh) {
+      this.grassMesh.count = Math.min(this.grassPlaced, this.preset.grass);
     }
   }
 
