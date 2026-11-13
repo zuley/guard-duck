@@ -1,0 +1,20 @@
+{
+  "name": "guard-duck",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "守卫鸭鸭 - 黄昏农场生存射击迷你关卡",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0"
+  }
+}

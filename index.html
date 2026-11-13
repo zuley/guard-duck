@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>守卫鸭鸭 · 黄昏农场生存战</title>
+<style>
+  :root {
+    --duck-yellow: #ffd95e;
+    --duck-orange: #f08c1e;
+    --ink: #1a1408;
+    --panel: rgba(20, 16, 10, 0.62);
+    --panel-line: rgba(255, 217, 94, 0.28);
+    --hp: #7ee06a;
+    --danger: #ff5346;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; }
+  body {
+    font-family: "Yuanti SC", "YouYuan", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    color: #fff; user-select: none; -webkit-user-select: none;
+  }
+  #app, #app canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #app canvas { cursor: none; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .4s; }
+  #hud.on { opacity: 1; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--panel-line);
+    border-radius: 14px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 6px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.08);
+  }
+  #playerPanel { position: absolute; top: 18px; left: 18px; padding: 12px 16px; display: flex; gap: 12px; align-items: center; min-width: 280px; }
+  #playerPanel .face { width: 46px; height: 46px; flex: 0 0 auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,.4)); }
+  #playerPanel .bars { flex: 1; }
+  .barLabel { display: flex; justify-content: space-between; font-size: 11px; letter-spacing: .12em; color: rgba(255,255,255,.75); margin-bottom: 4px; }
+  .bar { height: 12px; border-radius: 7px; background: rgba(0,0,0,.5); overflow: hidden; border: 1px solid rgba(255,255,255,.12); }
+  .bar > i { display: block; height: 100%; width: 100%; border-radius: 7px; transition: width .18s ease-out; }
+  #hpFill { background: linear-gradient(90deg, #59c94a, #a8f07e); box-shadow: 0 0 12px rgba(126,224,106,.55); }
+  #hpFill.low { background: linear-gradient(90deg, #d33a2c, #ff8a5c); box-shadow: 0 0 14px rgba(255,83,70,.7); }
+  #dashRow { display: flex; gap: 5px; margin-top: 7px; align-items: center; }
+  #dashRow span { font-size: 10px; letter-spacing: .14em; color: rgba(255,255,255,.6); margin-right: 3px; }
+  .pip { width: 22px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.16); overflow: hidden; }
+  .pip > i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #6fd6ff, #b7f0ff); box-shadow: 0 0 8px rgba(111,214,255,.6); }
+
+  #statsPanel { position: absolute; top: 18px; right: 18px; padding: 10px 18px; display: flex; gap: 22px; text-align: center; }
+  #statsPanel .stat b { display: block; font-size: 22px; font-weight: 800; color: var(--duck-yellow); text-shadow: 0 2px 8px rgba(0,0,0,.5); font-variant-numeric: tabular-nums; }
+  #statsPanel .stat span { font-size: 10px; letter-spacing: .18em; color: rgba(255,255,255,.65); }
+
+  #waveBanner {
+    position: absolute; top: 12%; left: 50%; transform: translate(-50%, -30px);
+    text-align: center; opacity: 0; transition: all .45s cubic-bezier(.2,.9,.25,1.2);
+  }
+  #waveBanner.show { opacity: 1; transform: translate(-50%, 0); }
+  #waveBanner .sub { font-size: 13px; letter-spacing: .5em; color: var(--duck-orange); text-shadow: 0 0 14px rgba(240,140,30,.6); }
+  #waveBanner .main { font-size: 52px; font-weight: 900; letter-spacing: .12em; color: #fff; text-shadow: 0 4px 0 rgba(0,0,0,.35), 0 0 34px rgba(255,217,94,.45); }
+  #waveBanner .tip { font-size: 13px; color: rgba(255,255,255,.8); margin-top: 4px; letter-spacing: .2em; }
+
+  #ammoPanel { position: absolute; right: 18px; bottom: 18px; padding: 10px 16px; text-align: right; }
+  #ammoPanel .ammoRow { display: flex; align-items: center; gap: 12px; }
+  #gunIcon { width: 52px; height: 52px; opacity: .95; filter: brightness(1.6); }
+  #ammoPanel .weapon { font-size: 11px; letter-spacing: .18em; color: rgba(255,255,255,.6); }
+  #ammoPanel .nums { font-size: 42px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  #ammoPanel .nums #mag { color: #fff; }
+  #ammoPanel .nums #mag.empty { color: var(--danger); animation: blink .5s steps(2) infinite; }
+  #ammoPanel .nums #mag.low { color: var(--duck-orange); }
+  #ammoPanel .nums small { font-size: 16px; color: rgba(255,255,255,.55); font-weight: 700; }
+  #reloadHint { font-size: 11px; letter-spacing: .16em; color: var(--duck-orange); height: 15px; }
+  #reloadBar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.14); margin-top: 6px; overflow: hidden; opacity: 0; }
+  #reloadBar.on { opacity: 1; }
+  #reloadBar > i { display: block; height: 100%; width: 0; background: var(--duck-orange); }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  #hintPanel { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; font-size: 10px; letter-spacing: .06em; color: rgba(255,255,255,.5); line-height: 1.7; }
+  #hintPanel b { color: var(--duck-yellow); font-weight: 700; background: rgba(255,255,255,.1); border-radius: 4px; padding: 0 4px; margin-right: 2px; }
+
+  #killfeed { position: absolute; right: 18px; top: 96px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .feed { padding: 5px 12px; font-size: 12px; letter-spacing: .08em; border-radius: 9px; background: rgba(20,16,10,.55); border: 1px solid rgba(255,255,255,.1); animation: feedIn .25s ease-out; color: rgba(255,255,255,.85); }
+  .feed em { color: var(--duck-yellow); font-style: normal; font-weight: 700; }
+  .feed.out { opacity: 0; transform: translateX(20px); transition: all .4s; }
+  @keyframes feedIn { from { opacity: 0; transform: translateX(24px); } }
+
+  #toast { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); padding: 8px 22px; border-radius: 999px; font-size: 14px; letter-spacing: .18em; background: rgba(20,16,10,.7); border: 1px solid var(--panel-line); opacity: 0; transition: opacity .3s; }
+  #toast.show { opacity: 1; }
+
+  /* 准星 */
+  #crosshair { position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 5; }
+  #crosshair i { position: absolute; background: #fff; box-shadow: 0 0 6px rgba(0,0,0,.8), 0 0 3px rgba(255,217,94,.9); border-radius: 2px; }
+  #crosshair .dot { width: 4px; height: 4px; left: -2px; top: -2px; border-radius: 50%; background: var(--duck-yellow); }
+  #crosshair .t { width: 2px; height: 9px; left: -1px; }
+  #crosshair .b { width: 2px; height: 9px; left: -1px; }
+  #crosshair .l { width: 9px; height: 2px; top: -1px; }
+  #crosshair .r { width: 9px; height: 2px; top: -1px; }
+  #hitmarker { position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 6; opacity: 0; }
+  #hitmarker i { position: absolute; width: 3px; height: 10px; background: #fff; border-radius: 2px; box-shadow: 0 0 6px rgba(255,80,60,.9); }
+  #hitmarker.kill i { background: var(--danger); height: 13px; }
+  #hitmarker.show { opacity: 1; }
+
+  #dmgVignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 42%, rgba(200,20,10,.55) 100%); transition: opacity .12s; }
+  #lowVignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(180,10,5,.45) 100%); }
+  #lowVignette.on { animation: lowPulse 1.1s ease-in-out infinite; }
+  @keyframes lowPulse { 0%,100% { opacity: .25; } 50% { opacity: .75; } }
+  #flash { position: fixed; inset: 0; pointer-events: none; background: #fff; opacity: 0; }
+
+  /* 出怪门威胁预警 */
+  .threat { position: fixed; width: 0; height: 0; z-index: 4; pointer-events: none; animation: threatFade 1.4s ease-out forwards; }
+  .threat i { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; border-right: 4px solid var(--danger); border-top: 4px solid var(--danger); filter: drop-shadow(0 0 6px rgba(255,83,70,.8)); }
+  @keyframes threatFade { 0% { opacity: 0; } 15% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+
+  /* ---------- 覆盖层 ---------- */
+  .overlay {
+    position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at 50% 30%, rgba(30,24,12,.55), rgba(6,6,10,.88));
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    transition: opacity .45s; pointer-events: auto;
+  }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+  /* 子元素（.btn / 商店按钮等）显式 pointer-events:auto 会覆盖继承的 none，
+     隐藏后仍形成透明点击死区（disabled 按钮还会吞掉事件），必须强制关闭 */
+  .overlay.hidden * { pointer-events: none !important; }
+  .card { text-align: center; max-width: 640px; padding: 40px 48px; }
+  .logo { width: 132px; height: 132px; margin: 0 auto 6px; filter: drop-shadow(0 10px 26px rgba(0,0,0,.55)); animation: bob 3.2s ease-in-out infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-9px) rotate(2deg); } }
+  h1.title {
+    font-size: 64px; font-weight: 900; letter-spacing: .14em; color: var(--duck-yellow);
+    text-shadow: 0 5px 0 #b06a10, 0 10px 30px rgba(0,0,0,.6), 0 0 60px rgba(255,217,94,.35);
+  }
+  .subtitle { margin-top: 6px; font-size: 14px; letter-spacing: .42em; color: rgba(255,255,255,.72); }
+  .desc { margin: 20px auto 0; font-size: 13px; line-height: 2; color: rgba(255,255,255,.66); letter-spacing: .06em; max-width: 460px; }
+  .btn {
+    pointer-events: auto; cursor: pointer; margin-top: 26px; padding: 15px 62px; font-size: 20px; font-weight: 800; letter-spacing: .3em;
+    color: var(--ink); background: linear-gradient(180deg, #ffe28a, var(--duck-orange)); border: none; border-radius: 999px;
+    box-shadow: 0 6px 0 #a05a08, 0 14px 34px rgba(240,140,30,.4); transition: transform .12s, box-shadow .12s;
+    font-family: inherit;
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 0 #a05a08, 0 18px 40px rgba(240,140,30,.5); }
+  .btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #a05a08; }
+  .btn.ghost { background: rgba(255,255,255,.1); color: #fff; box-shadow: 0 4px 0 rgba(0,0,0,.4); font-size: 15px; padding: 12px 36px; margin-left: 12px; }
+  .qualityRow { margin-top: 18px; font-size: 12px; letter-spacing: .16em; color: rgba(255,255,255,.6); }
+  .qualityRow button { pointer-events: auto; cursor: pointer; font-family: inherit; margin: 0 4px; padding: 5px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.2); background: transparent; color: rgba(255,255,255,.65); font-size: 12px; letter-spacing: .14em; }
+  .qualityRow button.sel { background: var(--duck-yellow); color: var(--ink); border-color: var(--duck-yellow); font-weight: 700; }
+
+  /* ---------- 商店 ---------- */
+  .shopCard { max-width: 880px; width: 94vw; max-height: 88vh; overflow-y: auto; padding: 26px 30px; text-align: left; }
+  .shopHead { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
+  .shopTitle { font-size: 30px; font-weight: 900; letter-spacing: .18em; color: var(--duck-yellow); text-shadow: 0 3px 0 #b06a10; }
+  .shopCoinsWrap { margin-left: auto; font-size: 13px; letter-spacing: .14em; color: rgba(255,255,255,.7); }
+  .shopCoinsWrap b { font-size: 24px; color: var(--duck-yellow); font-variant-numeric: tabular-nums; margin-left: 6px; }
+  .shopHead .btn.ghost { margin: 0; padding: 9px 22px; font-size: 13px; }
+  .shopTabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .shopTabs button { pointer-events: auto; cursor: pointer; font-family: inherit; padding: 8px 26px; border-radius: 999px; border: 1px solid rgba(255,255,255,.2); background: transparent; color: rgba(255,255,255,.65); font-size: 14px; letter-spacing: .2em; }
+  .shopTabs button.sel { background: var(--duck-yellow); color: var(--ink); border-color: var(--duck-yellow); font-weight: 700; }
+  .goodGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .sellList { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .tile { position: relative; aspect-ratio: 1; border-radius: 14px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); display: flex; align-items: center; justify-content: center; cursor: pointer; pointer-events: auto; transition: transform .12s, border-color .12s, background .12s; }
+  .tile:hover, .tile:focus-visible { transform: translateY(-3px); border-color: var(--duck-yellow); background: rgba(255,217,94,.12); outline: none; }
+  .tile canvas { width: 68%; height: 68%; }
+  .tile .price, .tile .count, .tile .lvl, .tile .state { position: absolute; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 999px; background: rgba(0,0,0,.5); letter-spacing: .05em; }
+  .tile .price { right: 5px; bottom: 5px; color: var(--duck-yellow); }
+  .tile .price::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--duck-yellow); margin-right: 4px; vertical-align: 1px; }
+  .tile .count { left: 5px; bottom: 5px; color: #fff; }
+  .tile .lvl { left: 5px; top: 5px; color: #fff; }
+  .tile .state { right: 5px; top: 5px; color: var(--ink); background: var(--duck-yellow); }
+  .tile.cant { opacity: .55; }
+  .tile.cant .price { color: rgba(255,255,255,.5); }
+  .tile.cant .price::before { background: rgba(255,255,255,.5); }
+  .tile .sellAll { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); pointer-events: auto; cursor: pointer; font-family: inherit; font-size: 10px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: none; background: rgba(255,255,255,.18); color: #fff; letter-spacing: .08em; }
+  .tile .sellAll:hover { background: var(--duck-orange); color: var(--ink); }
+  #tip { position: fixed; z-index: 60; max-width: 270px; pointer-events: none; background: rgba(22,15,6,.95); border: 1px solid rgba(255,217,94,.5); border-radius: 12px; padding: 12px 14px; box-shadow: 0 12px 32px rgba(0,0,0,.55); }
+  #tip.hidden { display: none; }
+  #tip b { display: block; font-size: 15px; color: var(--duck-yellow); letter-spacing: .06em; margin-bottom: 3px; }
+  #tip .kind { font-size: 10px; color: rgba(255,255,255,.55); letter-spacing: .18em; margin-bottom: 6px; }
+  #tip .desc { font-size: 12px; color: rgba(255,255,255,.85); line-height: 1.65; }
+  #tip .tprice { margin-top: 8px; font-size: 12px; font-weight: 800; color: var(--duck-yellow); }
+  #tip .hint { margin-top: 4px; font-size: 10px; color: rgba(255,255,255,.5); letter-spacing: .08em; }
+  .empty { padding: 30px; text-align: center; font-size: 13px; letter-spacing: .12em; color: rgba(255,255,255,.55); }
+  .shopFoot { margin-top: 16px; font-size: 11px; letter-spacing: .14em; color: rgba(255,255,255,.5); text-align: center; }
+  #buyPane.hidden, #sellPane.hidden { display: none; }
+  #gameoverScreen h1.title { color: var(--danger); text-shadow: 0 5px 0 #6d130c, 0 10px 30px rgba(0,0,0,.6); font-size: 54px; }
+  .resultGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 26px; }
+  .resultGrid .cell { padding: 14px 6px; border-radius: 14px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); }
+  .resultGrid b { display: block; font-size: 28px; font-weight: 900; color: var(--duck-yellow); font-variant-numeric: tabular-nums; }
+  .resultGrid span { font-size: 11px; letter-spacing: .2em; color: rgba(255,255,255,.6); }
+  #recordBadge { display: inline-block; margin-top: 18px; padding: 6px 26px; border-radius: 999px; background: linear-gradient(180deg, #ffe28a, var(--duck-orange)); color: var(--ink); font-weight: 900; letter-spacing: .3em; animation: bob 1.6s ease-in-out infinite; }
+  #recordBadge.hidden { display: none; }
+  #pauseScreen h1.title { font-size: 44px; }
+  #fps { position: fixed; left: 8px; top: 8px; z-index: 30; font: 11px/1.4 monospace; color: #9f9; background: rgba(0,0,0,.5); padding: 3px 7px; border-radius: 6px; display: none; }
+  #loading { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; gap: 18px; align-items: center; justify-content: center; background: #0b0e14; transition: opacity .6s; }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+  #loading .egg { width: 54px; height: 66px; border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; background: linear-gradient(180deg, #ffe28a, var(--duck-orange)); animation: bob 1.1s ease-in-out infinite; }
+  #loading p { font-size: 13px; letter-spacing: .4em; color: rgba(255,255,255,.6); }
+
+  /* ---------- 成长：等级 / 经验 / 天赋点 ---------- */
+  #growthRow { display: flex; align-items: center; gap: 7px; margin-top: 7px; }
+  #levelBadge { font-size: 12px; font-weight: 800; color: var(--ink); background: linear-gradient(180deg,#ffe28a,var(--duck-orange)); border-radius: 6px; padding: 2px 7px; letter-spacing: .04em; flex: 0 0 auto; }
+  .xpBar { flex: 1; height: 7px; border-radius: 4px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.12); overflow: hidden; }
+  .xpBar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#c9a2ff,#e6d0ff); box-shadow: 0 0 8px rgba(201,162,255,.6); transition: width .2s ease-out; }
+  #xpText { font-size: 10px; color: rgba(255,255,255,.6); font-variant-numeric: tabular-nums; flex: 0 0 auto; min-width: 46px; text-align: right; }
+  #pointsChip { flex: 0 0 auto; font-size: 12px; font-weight: 800; min-width: 22px; text-align: center; padding: 2px 6px; border-radius: 999px; background: rgba(255,255,255,.12); color: rgba(255,255,255,.55); border: 1px solid rgba(255,255,255,.15); }
+  #pointsChip.has { background: linear-gradient(180deg,#a8f07e,#59c94a); color: var(--ink); border-color: #a8f07e; box-shadow: 0 0 12px rgba(126,224,106,.7); animation: chipPulse 1.4s ease-in-out infinite; }
+  @keyframes chipPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+
+  /* 护盾条 */
+  #shieldBar { height: 6px; border-radius: 3px; background: rgba(0,0,0,.4); border: 1px solid rgba(126,224,106,.3); overflow: hidden; margin-top: 5px; opacity: 0; transition: opacity .2s; }
+  #shieldBar.on { opacity: 1; }
+  #shieldBar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#7ee06a,#d0ffb0); box-shadow: 0 0 10px rgba(126,224,106,.7); transition: width .15s; }
+
+  /* ---------- 技能栏 ---------- */
+  #skillBar { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 10px; }
+  #skillBar .slot { position: relative; width: 56px; height: 56px; border-radius: 14px; background: var(--panel); border: 1px solid var(--panel-line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+  #skillBar .slot .icon { font-size: 24px; font-weight: 900; color: var(--duck-yellow); text-shadow: 0 2px 6px rgba(0,0,0,.5); z-index: 2; }
+  #skillBar .slot .key { position: absolute; top: 3px; left: 6px; font-size: 10px; font-weight: 700; color: rgba(255,255,255,.7); z-index: 3; }
+  #skillBar .slot .cd { position: absolute; inset: 0; background: rgba(8,8,12,.72); transform-origin: bottom; transform: scaleY(0); z-index: 2; }
+  #skillBar .slot .cdText { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 800; color: #fff; z-index: 3; text-shadow: 0 1px 4px #000; }
+  #skillBar .slot.locked { opacity: .4; filter: grayscale(.7); }
+  #skillBar .slot.locked .icon { color: rgba(255,255,255,.5); }
+  #skillBar .slot.active { border-color: #ffe28a; animation: skillGlow .8s ease-in-out infinite; }
+  @keyframes skillGlow { 0%,100% { box-shadow: 0 0 12px rgba(255,217,94,.6); } 50% { box-shadow: 0 0 24px rgba(255,217,94,.95); } }
+
+  /* ---------- 天赋树 ---------- */
+  .talentCard { max-width: 940px; width: 95vw; max-height: 90vh; overflow-y: auto; padding: 26px 30px; text-align: left; }
+  .talentTree { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .branch { display: flex; flex-direction: column; gap: 10px; }
+  .branchHead { font-size: 18px; font-weight: 900; letter-spacing: .14em; color: var(--bc); text-shadow: 0 0 14px var(--bc); padding-bottom: 6px; border-bottom: 2px solid var(--bc); display: flex; flex-direction: column; gap: 2px; }
+  .branchHead span { font-size: 11px; font-weight: 400; letter-spacing: .06em; color: rgba(255,255,255,.55); text-shadow: none; }
+  .tnode { padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); display: flex; flex-direction: column; gap: 6px; }
+  .tnode.owned { border-color: var(--bc); background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px var(--bc); }
+  .tnode.locked { opacity: .5; }
+  .tnode b { font-size: 14px; color: #fff; letter-spacing: .05em; }
+  .tnode .pips { display: flex; gap: 4px; }
+  .tnode .pips i { width: 16px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.18); }
+  .tnode .pips i.on { background: var(--bc); box-shadow: 0 0 6px var(--bc); }
+  .tnode span { font-size: 11px; color: rgba(255,255,255,.6); line-height: 1.5; flex: 1; }
+  .tnode button { pointer-events: auto; cursor: pointer; font-family: inherit; padding: 6px 0; border-radius: 8px; border: none; background: linear-gradient(180deg,#ffe28a,var(--duck-orange)); color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+  .tnode button:disabled { background: rgba(255,255,255,.12); color: rgba(255,255,255,.4); cursor: default; }
+
+  /* 自定义滚动条 */
+  .shopCard::-webkit-scrollbar, .talentCard::-webkit-scrollbar { width: 8px; }
+  .shopCard::-webkit-scrollbar-thumb, .talentCard::-webkit-scrollbar-thumb { background: rgba(255,217,94,.35); border-radius: 4px; }
+  .shopCard::-webkit-scrollbar-track, .talentCard::-webkit-scrollbar-track { background: rgba(0,0,0,.2); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud">
+  <div id="playerPanel" class="panel">
+    <svg class="face" viewBox="0 0 100 100">
+      <circle cx="50" cy="54" r="38" fill="#ffd95e"/>
+      <circle cx="38" cy="18" r="9" fill="#ffd95e"/><circle cx="52" cy="14" r="10" fill="#ffd95e"/><circle cx="64" cy="19" r="8" fill="#ffd95e"/>
+      <path d="M30 40 L46 46" stroke="#20180a" stroke-width="6" stroke-linecap="round"/>
+      <path d="M70 40 L54 46" stroke="#20180a" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="40" cy="52" r="4.5" fill="#20180a"/><circle cx="60" cy="52" r="4.5" fill="#20180a"/>
+      <ellipse cx="50" cy="66" rx="17" ry="10" fill="#f08c1e"/>
+    </svg>
+    <div class="bars">
+      <div class="barLabel"><span>生命</span><span id="hpText">100</span></div>
+      <div class="bar"><i id="hpFill"></i></div>
+      <div id="shieldBar"><i id="shieldFill"></i></div>
+      <div id="dashRow"><span>冲刺</span><div class="pip"><i id="dashFill"></i></div></div>
+      <div id="growthRow">
+        <span id="levelBadge">Lv.1</span>
+        <div class="xpBar"><i id="xpFill"></i></div>
+        <span id="xpText">0 / 30</span>
+        <span id="pointsChip" title="天赋点 · T 键加点">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="statsPanel" class="panel">
+    <div class="stat"><b id="statWave">1</b><span>波次</span></div>
+    <div class="stat"><b id="statRemain">0</b><span>剩余</span></div>
+    <div class="stat"><b id="statKills">0</b><span>击杀</span></div>
+    <div class="stat"><b id="statScore">0</b><span>分数</span></div>
+    <div class="stat"><b id="statCoins">0</b><span>金币</span></div>
+    <div class="stat"><b id="statTime">0:00</b><span>时间</span></div>
+  </div>
+
+  <div id="waveBanner">
+    <div class="sub">ENEMY WAVE</div>
+    <div class="main" id="waveTitle">第 1 波</div>
+    <div class="tip" id="waveTip">掠夺者正在逼近农场…</div>
+  </div>
+
+  <div id="ammoPanel" class="panel">
+    <div class="ammoRow">
+      <canvas id="gunIcon" width="64" height="64"></canvas>
+      <div class="ammoCol">
+        <div class="weapon" id="weaponName">「谷仓」卡宾枪</div>
+        <div class="nums"><span id="mag">24</span><small>/ <span id="reserve">96</span></small></div>
+      </div>
+    </div>
+    <div id="reloadHint"></div>
+    <div id="reloadBar"><i id="reloadFill"></i></div>
+  </div>
+
+  <div id="hintPanel" class="panel">
+    <b>WASD</b>移动 <b>左键</b>射击 <b>空格</b>冲刺 <b>R</b>换弹 <b>1-4</b>技能 <b>B</b>商店
+  </div>
+
+  <div id="skillBar">
+    <div class="slot locked" data-skill="storm"><span class="key">1</span><span class="icon">嘎</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="shield"><span class="key">2</span><span class="icon">蹲</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="rage"><span class="key">3</span><span class="icon">温</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="slow"><span class="key">4</span><span class="icon">停</span><i class="cd"></i><span class="cdText"></span></div>
+  </div>
+
+  <div id="killfeed"></div>
+  <div id="toast"></div>
+</div>
+
+<div id="crosshair"><i class="dot"></i><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
+<div id="hitmarker"><i style="transform:translate(-8px,-12px) rotate(-45deg)"></i><i style="transform:translate(5px,-12px) rotate(45deg)"></i><i style="transform:translate(-8px,3px) rotate(45deg)"></i><i style="transform:translate(5px,3px) rotate(-45deg)"></i></div>
+<div id="dmgVignette"></div>
+<div id="lowVignette"></div>
+<div id="flash"></div>
+<div id="fps"></div>
+
+<div id="startScreen" class="overlay">
+  <div class="card">
+    <svg class="logo" viewBox="0 0 100 100">
+      <ellipse cx="50" cy="88" rx="30" ry="6" fill="rgba(0,0,0,.35)"/>
+      <circle cx="50" cy="52" r="36" fill="#ffd95e"/>
+      <circle cx="37" cy="17" r="9" fill="#ffd95e"/><circle cx="51" cy="12" r="10" fill="#ffd95e"/><circle cx="64" cy="18" r="8" fill="#ffd95e"/>
+      <path d="M28 38 L45 45" stroke="#20180a" stroke-width="6.5" stroke-linecap="round"/>
+      <path d="M72 38 L55 45" stroke="#20180a" stroke-width="6.5" stroke-linecap="round"/>
+      <circle cx="38" cy="51" r="5" fill="#20180a"/><circle cx="62" cy="51" r="5" fill="#20180a"/>
+      <circle cx="39.6" cy="49.4" r="1.6" fill="#fff"/><circle cx="63.6" cy="49.4" r="1.6" fill="#fff"/>
+      <ellipse cx="50" cy="66" rx="18" ry="11" fill="#f08c1e"/>
+      <ellipse cx="50" cy="63" rx="15" ry="6" fill="#ffab4a"/>
+    </svg>
+    <h1 class="title">守卫鸭鸭</h1>
+    <div class="subtitle">GUARD DUCK · 黄昏农场生存战</div>
+    <div class="qualityRow">画质
+      <button data-q="high" class="sel">极致</button>
+      <button data-q="medium">均衡</button>
+    </div>
+    <button class="btn" id="startBtn">开始守卫</button>
+  </div>
+</div>
+
+<div id="pauseScreen" class="overlay hidden">
+  <div class="card">
+    <h1 class="title">战斗暂停</h1>
+    <div class="subtitle">鸭鸭正在梳理羽毛…</div>
+    <div>
+      <button class="btn" id="resumeBtn">继续战斗</button>
+      <button class="btn ghost" id="quitBtn">回到标题</button>
+    </div>
+  </div>
+</div>
+
+<div id="gameoverScreen" class="overlay hidden">
+  <div class="card">
+    <h1 class="title">鸭鸭倒下了</h1>
+    <div class="subtitle" id="overSub">农场失守…但羽毛仍在风中飘扬</div>
+    <div id="recordBadge" class="hidden">新纪录！</div>
+    <div class="resultGrid">
+      <div class="cell"><b id="resWave">0</b><span>存活波次</span></div>
+      <div class="cell"><b id="resKills">0</b><span>击杀</span></div>
+      <div class="cell"><b id="resScore">0</b><span>总分</span></div>
+      <div class="cell"><b id="resAcc">0%</b><span>命中率</span></div>
+      <div class="cell"><b id="resTime">0:00</b><span>存活时间</span></div>
+      <div class="cell"><b id="resCoins">0</b><span>金币收入</span></div>
+      <div class="cell"><b id="resBest">0</b><span>历史最佳</span></div>
+    </div>
+    <button class="btn" id="retryBtn">再次守卫</button>
+    <button class="btn ghost" id="titleBtn">回到标题</button>
+  </div>
+</div>
+
+<div id="shopScreen" class="overlay hidden">
+  <div class="card shopCard panel">
+    <div class="shopHead">
+      <div class="shopTitle">农场商店</div>
+      <div class="shopCoinsWrap">金币<b id="shopCoins">0</b></div>
+      <button class="btn ghost" id="shopClose">返回战斗 (B)</button>
+    </div>
+    <div class="shopTabs">
+      <button id="tabBuy" class="sel">购买装备</button>
+      <button id="tabSell">出售背包</button>
+    </div>
+    <div id="buyPane" class="goodGrid"></div>
+    <div id="sellPane" class="sellList hidden"></div>
+    <div class="shopFoot">击败敌人得金币 · 鸭杂拾取入包 · 商店打开时战斗暂停</div>
+  </div>
+</div>
+
+<div id="talentScreen" class="overlay hidden">
+  <div class="card talentCard panel">
+    <div class="shopHead">
+      <div class="shopTitle">天赋树</div>
+      <div class="shopCoinsWrap">天赋点<b id="talentPoints">0</b></div>
+      <button class="btn ghost" id="talentClose">返回战斗 (T)</button>
+    </div>
+    <div id="talentTree" class="talentTree"></div>
+    <div class="shopFoot">升级获得天赋点 · 点选节点强化 · ★ 为主动技能（数字键 1-4 释放）· 打开时战斗暂停</div>
+  </div>
+</div>
+
+<div id="loading"><div class="egg"></div><p>正在孵化战场…</p></div>
+
+<div id="tip" class="hidden"></div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
