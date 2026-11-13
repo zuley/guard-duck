@@ -1,10 +1,17 @@
 // 测评修复验证脚本：每项断言 = 修复后的期望行为，全部 PASS 才算处理完成
 // 运行：先 npm run dev，再 node scripts/playtest.mjs
+// 依赖：devDependency `ws`、本机 Chrome/Chromium（或 CHROME_PATH）。
+// 通过 CDP WebSocket 驱动浏览器；本 PR 不运行本脚本（禁止用 shell 驱动 GUI/CDP）。
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import WebSocket from 'ws';
+import { findChrome, chromeUserDataDir } from './chrome-path.mjs';
 
-const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const CHROME = findChrome();
+if (!CHROME) {
+  console.error('Chrome/Chromium 未找到。请设置环境变量 CHROME_PATH。');
+  process.exit(1);
+}
 const URL = 'http://127.0.0.1:5173/?q=medium';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 mkdirSync('shots/playtest', { recursive: true });
@@ -12,7 +19,7 @@ mkdirSync('shots/playtest', { recursive: true });
 const chrome = spawn(CHROME, [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--enable-unsafe-swiftshader',
   '--use-angle=swiftshader', '--hide-scrollbars', '--window-size=1280,720',
-  '--remote-debugging-port=9223', '--user-data-dir=D:/Code/swyy/shots/.playtest-profile',
+  '--remote-debugging-port=9223', '--user-data-dir=' + chromeUserDataDir('playtest-profile'),
   'about:blank',
 ], { stdio: 'ignore' });
 

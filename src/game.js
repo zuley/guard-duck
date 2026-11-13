@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
 import { FX } from './fx.js';
-import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, TALENTS, talentNext, talentEffects, SKILLS, applyTalents, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact } from './rules.js';
+import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, TALENTS, talentNext, talentEffects, SKILLS, applyTalents, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, skillCenter } from './rules.js';
+import { canDisposeGeometry, canDisposeMaterial } from './dispose.js';
 import { ARENA, GATES, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
 import { glowSprite } from './textures.js';
 
@@ -83,6 +84,27 @@ export class Game {
     this.bullets = [];
     this.ebullets = [];
     this.pickups = [];
+    this._dir = new THREE.Vector3();
+    this._ndc = new THREE.Vector2();
+    this._muzzle = new THREE.Vector3();
+    this._bdir = new THREE.Vector3();
+    this._up = new THREE.Vector3(0, 1, 0);
+    this._target = new THREE.Vector3();
+    this._dashFallback = new THREE.Vector3();
+    this._vis = new THREE.Vector3();
+    this._want = new THREE.Vector3();
+    this._to = new THREE.Vector3();
+    this._dirN = new THREE.Vector3();
+    this._strafe = new THREE.Vector3();
+    this._sep = new THREE.Vector3();
+    this._sparkDir = new THREE.Vector3();
+    this._aimProj = new THREE.Vector3();
+    this._decalPos = new THREE.Vector3();
+    this._step = new THREE.Vector3();
+    this._botLead = new THREE.Vector3();
+    this._botDir = new THREE.Vector3();
+    this._botMove = new THREE.Vector3();
+    this._upWorld = this._up;
     this.resetStats();
   }
 
@@ -134,14 +156,37 @@ export class Game {
     if (this.fragile) { this.p.maxHp = 1; this.p.hp = Math.min(this.p.hp, 1); }
   }
 
+  // 释放实体独占的 GPU 资源。Sprite 共享几何、子弹缓存几何/材质、缓存贴图均不销毁。
+  disposeObject(root, { sharedGeo = new Set(), sharedMat = new Set() } = {}) {
+    if (!root) return;
+    this.engine.scene.remove(root);
+    root.traverse((c) => {
+      if (canDisposeGeometry(c, sharedGeo)) c.geometry.dispose();
+      const mats = c.material ? (Array.isArray(c.material) ? c.material : [c.material]) : [];
+      for (const m of mats) {
+        if (canDisposeMaterial(m, sharedMat)) m.dispose();
+      }
+    });
+  }
+
+  disposeBulletVis(g) {
+    if (!g) return;
+    this.disposeObject(g, { sharedGeo: new Set([this._bulletGeo, this._tailGeo]), sharedMat: new Set([this._bulletMat]) });
+  }
+
+  disposeHpBar(bar) {
+    if (!bar) return;
+    this.disposeObject(bar.group);
+  }
+
   clearField() {
     for (const e of this.enemies) {
       this.engine.scene.remove(e.duck.group); e.duck.dispose();
-      if (e.hpBar) this.engine.scene.remove(e.hpBar.group);
+      if (e.hpBar) this.disposeHpBar(e.hpBar);
     }
-    for (const pk of this.pickups) this.engine.scene.remove(pk.mesh);
-    for (const b of this.bullets) if (b.vis) this.engine.scene.remove(b.vis);
-    for (const b of this.ebullets) if (b.spr) this.engine.scene.remove(b.spr);
+    for (const pk of this.pickups) this.disposeObject(pk.mesh);
+    for (const b of this.bullets) this.disposeBulletVis(b.vis);
+    for (const b of this.ebullets) this.disposeBulletVis(b.spr);
     this.enemies = []; this.pickups = []; this.bullets = []; this.ebullets = [];
   }
 
@@ -190,12 +235,14 @@ export class Game {
     this.mouseFire = false;
     this.hud.screen('pause');
     this.hud.syncVolume(this.audio);
+    this.audio.syncMusicToState('paused');
   }
 
   resume() {
     if (this.state !== 'paused') return;
     this.state = 'playing';
     this.hud.screen(null);
+    this.audio.syncMusicToState('playing');
   }
 
   /* ---------------- 商店 ---------------- */
@@ -209,6 +256,7 @@ export class Game {
     this.hud.shopOpen(true);
     this.hud.renderShop(this);
     this.audio.uiClick();
+    this.audio.syncMusicToState('shop');
   }
 
   closeShop() {
@@ -217,6 +265,7 @@ export class Game {
     this.keys.clear(); // 商店里按过的空格/方向键不得残留成冲刺/移动
     this.hud.shopOpen(false);
     this.audio.uiClick();
+    this.audio.syncMusicToState('playing');
   }
 
   buyGood(id) {
@@ -315,6 +364,7 @@ export class Game {
     this.hud.talentOpen(true);
     this.hud.renderTalents(this);
     this.audio.uiClick();
+    this.audio.syncMusicToState('talent');
   }
 
   closeTalents() {
@@ -323,6 +373,7 @@ export class Game {
     this.keys.clear();
     this.hud.talentOpen(false);
     this.audio.uiClick();
+    this.audio.syncMusicToState('playing');
   }
 
   buyTalent(id) {
@@ -457,7 +508,7 @@ export class Game {
     // 绝不吸附到弹道落点。真实落点由地面琥珀环 + 曳光 + 弹着贴花单独传达。
     let cx, cy;
     if (this.padAim) {
-      const v = this.aimPoint.clone().project(this.engine.camera);
+      const v = this._aimProj.copy(this.aimPoint).project(this.engine.camera);
       cx = (v.x * 0.5 + 0.5) * innerWidth;
       cy = (-v.y * 0.5 + 0.5) * innerHeight;
     } else {
@@ -465,7 +516,11 @@ export class Game {
       cy = this.mouse.y;
     }
     this.hud.crosshair(cx, cy, 7 + spread * 520, this.state === 'playing');
-    this.hud.fps(this.engine.fps, this.showFps);
+    const ri = this.engine.renderer.info;
+    const extra = this.showFps
+      ? `\n${ri.render.calls} calls  ${ri.render.triangles} tris\n${ri.memory.geometries} geos  ${ri.memory.textures} tex`
+      : '';
+    this.hud.fps(this.engine.fps, this.showFps, extra);
   }
 
   spreadNow() {
@@ -479,7 +534,7 @@ export class Game {
     const p = this.p;
     if (this.bot) this.botControl();
     const k = this.keys;
-    const dir = new THREE.Vector3(
+    const dir = this._dir.set(
       (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0),
       0,
       (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) - (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0));
@@ -493,7 +548,7 @@ export class Game {
     if (p.shieldT > 0) { p.shieldT = Math.max(0, p.shieldT - dt); if (p.shieldT <= 0) p.shield = 0; }
     if (this.slowT > 0) { this.slowT = Math.max(0, this.slowT - dt); if (this.slowT <= 0) this.slowFactor = 1; }
     if (k.has('Space') && p.dashCd <= 0) {
-      p.dashDir.copy(dir.lengthSq() > 0 ? dir : new THREE.Vector3(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw)));
+      p.dashDir.copy(dir.lengthSq() > 0 ? dir : this._dashFallback.set(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw)));
       p.dashT = 0.22; p.dashCd = 1.1 * (this.loadout.dashCdMul ?? 1); p.iframes = 0.34;
       this.audio.dash();
       this.fx.ring(p.pos.clone().setY(0.3), 0xb7f0ff, 1.6);
@@ -502,7 +557,7 @@ export class Game {
     }
 
     const sm = this.loadout.speedMul;
-    const target = p.dashT > 0 ? p.dashDir.clone().multiplyScalar(13.5 * sm) : dir.clone().multiplyScalar(6.2 * sm);
+    const target = this._target.copy(p.dashT > 0 ? p.dashDir : dir).multiplyScalar((p.dashT > 0 ? 13.5 : 6.2) * sm);
     p.vel.lerp(target, 1 - Math.exp(-dt * (p.dashT > 0 ? 30 : 11)));
     p.pos.addScaledVector(p.vel, dt);
     p.pos.x = Math.max(-ARENA, Math.min(ARENA, p.pos.x));
@@ -515,7 +570,7 @@ export class Game {
     if (this.padAim) {
       this.aimPoint.set(p.pos.x + this.padAim.x * 10, 0.7, p.pos.z + this.padAim.z * 10);
     } else {
-      const ndc = new THREE.Vector2(
+      const ndc = this._ndc.set(
         (this.mouse.x / innerWidth) * 2 - 1, -(this.mouse.y / innerHeight) * 2 + 1);
       this.ray.setFromCamera(ndc, this.engine.camera);
       const ro = this.ray.ray.origin, rd = this.ray.ray.direction;
@@ -537,8 +592,8 @@ export class Game {
     p.aimYaw = Math.atan2(this.aimPoint.x - p.pos.x, this.aimPoint.z - p.pos.z);
 
     // 弹道落点预测：与子弹判定同规则步进，供准星显示
-    const muzzle = this.playerDuck.muzzleWorld(new THREE.Vector3());
-    const bdir = this.aimPoint.clone().sub(muzzle);
+    const muzzle = this.playerDuck.muzzleWorld(this._muzzle);
+    const bdir = this._bdir.copy(this.aimPoint).sub(muzzle);
     if (bdir.lengthSq() < 1e-8) bdir.set(0, 0, 1); else bdir.normalize();
     const targets = [];
     for (const e of this.enemies) {
@@ -631,13 +686,16 @@ export class Game {
       if (Math.cos(this.t * 0.3) > 0) k.add('KeyD'); else k.add('KeyA');
       return;
     }
-    const lead = nearest.vel.clone().multiplyScalar(Math.min(0.45, nd / 70));
-    const v = nearest.pos.clone().add(lead).setY(0).project(this.engine.camera);
+    const lead = this._botLead.copy(nearest.vel).multiplyScalar(Math.min(0.45, nd / 70));
+    const v = this._aimProj.copy(nearest.pos).add(lead).setY(0).project(this.engine.camera);
     this.mouse.x = (v.x * 0.5 + 0.5) * innerWidth;
     this.mouse.y = (-v.y * 0.5 + 0.5) * innerHeight;
     this.mouse.down = true;
-    const dir = nearest.pos.clone().sub(p.pos).setY(0).normalize();
-    const move = nd > 9 ? dir : nd < 5 ? dir.clone().negate() : new THREE.Vector3(-dir.z, 0, dir.x);
+    const dir = this._botDir.copy(nearest.pos).sub(p.pos).setY(0).normalize();
+    const move = this._botMove;
+    if (nd > 9) move.copy(dir);
+    else if (nd < 5) move.copy(dir).negate();
+    else move.set(-dir.z, 0, dir.x);
     move.x -= p.pos.x / 22; move.z -= p.pos.z / 22;
     if (move.lengthSq() > 1e-6) move.normalize();
     if (move.x > 0.35) k.add('KeyD'); else if (move.x < -0.35) k.add('KeyA');
@@ -661,10 +719,10 @@ export class Game {
     p.fireT = 60 / (lo.rpm * (raging ? lo.rage.rpmMul : 1));
     p.heat = Math.min(1, p.heat + 0.11);
     this.shots += lo.pellets;
-    const origin = this.playerDuck.muzzleWorld(new THREE.Vector3());
-    const base = this.aimPoint.clone().sub(origin).normalize();
+    const origin = this.playerDuck.muzzleWorld(this._muzzle);
+    const base = this._bdir.copy(this.aimPoint).sub(origin).normalize();
     const spread = this.spreadNow();
-    const up = new THREE.Vector3(0, 1, 0);
+    const up = this._up;
     const dmg = lo.damage * (raging ? lo.rage.dmgMul : 1);
     for (let i = 0; i < lo.pellets; i++) {
       const d = base.clone();
@@ -953,14 +1011,17 @@ export class Game {
     const cam = this.engine.camera;
     const frustum = this._frustum.setFromProjectionMatrix(
       this._projMat.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
-    const visPoint = new THREE.Vector3();
+    const visPoint = this._vis;
+    const want = this._want;
+    const dirN = this._dirN;
     for (const e of this.enemies) {
       if (e.dead) { e.duck.update(dt, { moving: false }); continue; }
       const t = ENEMY_TYPES[e.type];
-      const to = p.pos.clone().sub(e.pos); to.y = 0;
+      const to = this._to.copy(p.pos).sub(e.pos); to.y = 0;
       const dist = to.length();
-      const dirN = to.clone().normalize();
-      let want = new THREE.Vector3();
+      dirN.copy(to);
+      if (dirN.lengthSq() > 0) dirN.normalize();
+      want.set(0, 0, 0);
       const speed = e.speed * this.plan.speedScale * (this.slowT > 0 ? this.slowFactor : 1);
 
       if (e.skillKind) {
@@ -971,7 +1032,8 @@ export class Game {
         } else if (e.skillCd <= 0 && (e.skillKind === 'nova' || dist < ELITE_SKILL.range)) {
           const sk = e.skillKind === 'nova' ? BOSS_SKILL : ELITE_SKILL;
           e.skillT = sk.windup; e.skillCd = sk.cd;
-          this.fx.zone(e.pos.clone(), sk.radius, e.skillKind === 'nova' ? 0xff4646 : 0xffa040, sk.windup);
+          e.skillPos = e.pos.clone();
+          this.fx.zone(e.skillPos, sk.radius, e.skillKind === 'nova' ? 0xff4646 : 0xffa040, sk.windup);
           this.audio.skillCast();
           // 保命预警走独立高优先级通道，不被技能/拾取 toast 覆盖
           this.hud.alert(e.skillKind === 'nova' ? '⚠ 鸭王蓄力全图冲击波！看准时机冲刺闪避' : '⚠ 精英蓄力战争践踏！快出圈', sk.windup * 1000 + 500);
@@ -990,7 +1052,7 @@ export class Game {
             if (dist < e.reach + 0.35 && !segBlocked(e.pos, p.pos, this.world.colliders)) {
               this.damagePlayer(e.damage);
               this.fx.ring(p.pos.clone().setY(0.4), 0xff9060, 1.4);
-              this.fx.spark(p.pos.clone().setY(0.7), dirN.clone().multiplyScalar(-0.5), 5, 0xffb080, 4);
+              this.fx.spark(p.pos.clone().setY(0.7), this._sparkDir.copy(dirN).multiplyScalar(-0.5), 5, 0xffb080, 4);
             }
           }
         } else {
@@ -1004,17 +1066,17 @@ export class Game {
         const ideal = t.range * 0.75;
         if (dist > ideal + 1.5) want.copy(dirN).multiplyScalar(speed);
         else if (dist < ideal - 2) want.copy(dirN).multiplyScalar(-speed * 0.7);
-        const strafe = new THREE.Vector3(-dirN.z, 0, dirN.x).multiplyScalar(Math.sin(this.t * 0.8 + e.seed) * speed * 0.65);
+        const strafe = this._strafe.set(-dirN.z, 0, dirN.x).multiplyScalar(Math.sin(this.t * 0.8 + e.seed) * speed * 0.65);
         want.add(strafe);
         e.fireT -= dt;
         visPoint.copy(e.pos); visPoint.y += 0.8;
         if (e.fireT <= 0 && canEngage(dist, t.range, frustum.containsPoint(visPoint)) && !segBlocked(e.pos, p.pos, this.world.colliders)) {
           e.fireT = t.fireInterval * (0.8 + this.rng() * 0.5);
-          const origin = e.duck.muzzleWorld(new THREE.Vector3());
+          const origin = e.duck.muzzleWorld(this._muzzle);
           const pellets = t.pellets || 1;
           for (let i = 0; i < pellets; i++) {
             const d = p.pos.clone().setY(0.6).sub(origin).normalize();
-            d.applyAxisAngle(new THREE.Vector3(0, 1, 0), (this.rng() - 0.5) * (pellets > 1 ? (t.spread || 0.22) : 0.09));
+            d.applyAxisAngle(this._up, (this.rng() - 0.5) * (pellets > 1 ? (t.spread || 0.22) : 0.09));
             d.normalize();
             this.ebullets.push({ pos: origin.clone(), vel: d.multiplyScalar(t.bulletSpeed), life: 3, dmg: e.damage });
           }
@@ -1024,26 +1086,29 @@ export class Game {
         }
       }
 
-      // 分离
-      if (e.skillT > 0) want.multiplyScalar(0.15);
-      for (const o of this.enemies) {
-        if (o === e || o.dead) continue;
-        const dx = e.pos.x - o.pos.x, dz = e.pos.z - o.pos.z;
-        const d = Math.hypot(dx, dz);
-        const min = (e.radius + o.radius) * 1.05;
-        if (d < min && d > 1e-4) want.add(new THREE.Vector3(dx / d, 0, dz / d).multiplyScalar((min - d) * 6));
+      // 蓄力期间原地顿足（与预警圈位置一致，避免圈画在 A、伤害打在 B）
+      const rooted = e.skillT > 0;
+      if (!rooted) {
+        for (const o of this.enemies) {
+          if (o === e || o.dead) continue;
+          const dx = e.pos.x - o.pos.x, dz = e.pos.z - o.pos.z;
+          const d = Math.hypot(dx, dz);
+          const min = (e.radius + o.radius) * 1.05;
+          if (d < min && d > 1e-4) want.add(this._sep.set(dx / d, 0, dz / d).multiplyScalar((min - d) * 6));
+        }
+        const pdx = e.pos.x - p.pos.x, pdz = e.pos.z - p.pos.z;
+        const pd = Math.hypot(pdx, pdz);
+        const pmin = e.radius + 0.5;
+        if (pd < pmin && pd > 1e-4) want.add(this._sep.set(pdx / pd, 0, pdz / pd).multiplyScalar((pmin - pd) * 8));
+        e.vel.lerp(want, 1 - Math.exp(-dt * 6));
+        e.pos.addScaledVector(e.vel, dt);
+        e.pos.x = Math.max(-27, Math.min(27, e.pos.x));
+        e.pos.z = Math.max(-27, Math.min(27, e.pos.z));
+        resolveColliders(e.pos, e.radius, this.world.colliders);
+        e.pos.y = groundHeight(e.pos.x, e.pos.z);
+      } else {
+        e.vel.set(0, 0, 0);
       }
-      const pdx = e.pos.x - p.pos.x, pdz = e.pos.z - p.pos.z;
-      const pd = Math.hypot(pdx, pdz);
-      const pmin = e.radius + 0.5;
-      if (pd < pmin && pd > 1e-4) want.add(new THREE.Vector3(pdx / pd, 0, pdz / pd).multiplyScalar((pmin - pd) * 8));
-
-      e.vel.lerp(want, 1 - Math.exp(-dt * 6));
-      e.pos.addScaledVector(e.vel, dt);
-      e.pos.x = Math.max(-27, Math.min(27, e.pos.x));
-      e.pos.z = Math.max(-27, Math.min(27, e.pos.z));
-      resolveColliders(e.pos, e.radius, this.world.colliders);
-      e.pos.y = groundHeight(e.pos.x, e.pos.z);
       e.duck.group.position.copy(e.pos);
       e.duck.update(dt, {
         moving: e.vel.length() > 0.4, speed: e.vel.length(),
@@ -1065,7 +1130,7 @@ export class Game {
       if (e.dead && e.duck.deathT > 1.5) {
         this.engine.scene.remove(e.duck.group);
         e.duck.dispose();
-        if (e.hpBar) this.engine.scene.remove(e.hpBar.group);
+        if (e.hpBar) this.disposeHpBar(e.hpBar);
         this.enemies.splice(i, 1);
       }
     }
@@ -1073,18 +1138,20 @@ export class Game {
 
   castEnemySkill(e) {
     const p = this.p;
+    const origin = skillCenter(e);
     if (e.skillKind === 'nova') {
-      this.fx.ring(e.pos.clone().setY(0.5), 0xff5040, BOSS_SKILL.radius);
-      this.fx.spark(e.pos.clone().setY(1.2), new THREE.Vector3(0, 1, 0), 26, 0xff8060, 8);
+      // 鸭王冲击波伤害是全图的；特效圆心仍用起手冻结点，避免与预警圈错位。
+      this.fx.ring(origin.clone().setY(0.5), 0xff5040, BOSS_SKILL.radius);
+      this.fx.spark(origin.clone().setY(1.2), this._upWorld, 26, 0xff8060, 8);
       this.engine.addShake(0.5);
       this.audio.boom();
       this.damagePlayer(e.damage * BOSS_SKILL.dmgMul);
     } else {
-      this.fx.ring(e.pos.clone().setY(0.4), 0xffa040, ELITE_SKILL.radius);
-      this.fx.spark(e.pos.clone().setY(0.8), new THREE.Vector3(0, 1, 0), 14, 0xffc080, 6);
+      this.fx.ring(origin.clone().setY(0.4), 0xffa040, ELITE_SKILL.radius);
+      this.fx.spark(origin.clone().setY(0.8), this._upWorld, 14, 0xffc080, 6);
       this.engine.addShake(0.3);
       this.audio.boom();
-      if (Math.hypot(p.pos.x - e.pos.x, p.pos.z - e.pos.z) < ELITE_SKILL.radius)
+      if (Math.hypot(p.pos.x - origin.x, p.pos.z - origin.z) < ELITE_SKILL.radius)
         this.damagePlayer(e.damage * ELITE_SKILL.dmgMul);
     }
   }
@@ -1137,7 +1204,7 @@ export class Game {
       b.life -= dt;
       let gone = b.life <= 0;
       if (!gone) {
-        const step = b.vel.clone().multiplyScalar(dt);
+        const step = this._step.copy(b.vel).multiplyScalar(dt);
         const n = Math.min(12, Math.max(1, Math.ceil(step.length() / 0.3)));
         step.divideScalar(n);
         for (let s = 0; s < n && !gone; s++) {
@@ -1171,25 +1238,30 @@ export class Game {
             if (wy !== null && b.pos.y <= wy + 0.04) {
               // 落水：白色水花，不产生焦痕
               this.fx.smoke(b.pos, 2, 0xd8ece8, 0.3, 1.5, 0.5);
-              this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 5, 0xbfe8e0, 3);
+              this.fx.spark(b.pos, this._upWorld, 5, 0xbfe8e0, 3);
               gone = true;
             } else if (b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
               this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
-              this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, 0xc8b080, 3);
+              this.fx.spark(b.pos, this._upWorld, 4, 0xc8b080, 3);
               this.fx.decal(b.pos, 0.28);
               gone = true;
             }
           }
           if (!gone && b.traveled >= b.range) {
-            this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
             const wy = waterSurfaceAt(b.pos.x, b.pos.z);
-            this.fx.decal(new THREE.Vector3(b.pos.x, wy !== null ? wy : groundHeight(b.pos.x, b.pos.z), b.pos.z), 0.28);
+            if (wy !== null) {
+              this.fx.smoke(b.pos, 2, 0xd8ece8, 0.3, 1.5, 0.5);
+              this.fx.spark(b.pos, this._upWorld, 5, 0xbfe8e0, 3);
+            } else {
+              this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
+              this.fx.decal(this._decalPos.set(b.pos.x, groundHeight(b.pos.x, b.pos.z), b.pos.z), 0.28);
+            }
             gone = true;
           }
         }
       }
       if (gone) {
-        if (b.vis) this.engine.scene.remove(b.vis);
+        this.disposeBulletVis(b.vis);
         this.bullets.splice(i, 1);
       } else if (b.vis) {
         b.vis.position.copy(b.pos);
@@ -1201,7 +1273,7 @@ export class Game {
       b.life -= dt;
       let gone = b.life <= 0;
       if (!gone) {
-        const step = b.vel.clone().multiplyScalar(dt);
+        const step = this._step.copy(b.vel).multiplyScalar(dt);
         const n = Math.min(12, Math.max(1, Math.ceil(step.length() / 0.3)));
         step.divideScalar(n);
         for (let s = 0; s < n && !gone; s++) {
@@ -1228,7 +1300,7 @@ export class Game {
         }
       }
       if (gone) {
-        if (b.spr) this.engine.scene.remove(b.spr);
+        this.disposeBulletVis(b.spr);
         this.ebullets.splice(i, 1);
       } else {
         if (!b.spr) {
@@ -1316,7 +1388,7 @@ export class Game {
         gone = true;
       }
       if (gone) {
-        this.engine.scene.remove(pk.mesh);
+        this.disposeObject(pk.mesh);
         this.pickups.splice(i, 1);
       }
     }

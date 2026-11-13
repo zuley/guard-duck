@@ -17,6 +17,7 @@ import {
   rollLoot,
   computeLoadout,
   shopCatalog,
+  skillCenter,
   gearNext,
   xpForLevel,
   xpForKill,
@@ -672,5 +673,78 @@ describe('枪支射程', () => {
 
   it('射程不短于伤害衰减末端（衰减区间内仍有伤害）', () => {
     for (const g of Object.values(GUNS)) expect(g.range).toBeGreaterThanOrEqual(g.falloffEnd);
+  });
+});
+describe('商店目录与初始枪', () => {
+  it('目录不含免费卡宾枪（由商店 UI 单独插入，避免价格断言把 0 当成可购项）', () => {
+    const cat = shopCatalog();
+    expect(cat.some((g) => g.id === 'carbine')).toBe(false);
+    expect(GUNS.carbine.price).toBe(0);
+    expect(cat.filter((g) => g.kind === 'gun').map((g) => g.id).sort())
+      .toEqual(['longrifle', 'repeater', 'shotgun']);
+  });
+  it('子弹箱说明标明备弹全枪通用', () => {
+    const ammo = shopCatalog().find((g) => g.id === 'ammo');
+    expect(ammo.desc).toMatch(/全枪通用/);
+    expect(ammo.desc).toMatch(/\+48/);
+  });
+});
+
+describe('波次体量与经济基线（回归快照，改数值需同步）', () => {
+  it('第 1/2/5/7 波敌人构成与上限', () => {
+    const w1 = wavePlan(1);
+    expect(w1.counts.brawler).toBe(6);
+    expect(w1.counts.elite).toBe(1);
+    expect(w1.counts.boss).toBe(0);
+    expect(totalOf(w1)).toBe(7);
+
+    const w2 = wavePlan(2);
+    expect(w2.counts.clubber).toBeGreaterThan(0);
+    expect(w2.counts.knifer).toBeGreaterThan(0);
+
+    const w5 = wavePlan(5);
+    expect(w5.counts.boss).toBe(1);
+    expect(w5.counts.elite).toBe(1);
+    expect(w5.counts.heavy).toBe(1);
+    expect(totalOf(w5)).toBe(33); // 尚未触顶，精确快照；改 wavePlan 时必须同步
+
+    const w7 = wavePlan(7);
+    expect(w7.counts.boss).toBe(0);
+    expect(w7.counts.elite).toBe(1);
+    expect(totalOf(w7)).toBe(42);
+  });
+
+  it('从第 7 波起总量封顶 42（含精英，Boss 波让出 1 个名额）', () => {
+    for (let w = 7; w <= 20; w++) {
+      const p = wavePlan(w);
+      expect(totalOf(p)).toBe(42);
+    }
+  });
+
+  it('击杀金币能在第 4 波前后攒够第一把付费枪', () => {
+    // 按最低兵种（不含随机精英溢价）累加，作为「最早购买窗口」下界
+    let coins = 0;
+    for (let w = 1; w <= 4; w++) {
+      const { counts } = wavePlan(w);
+      for (const [type, n] of Object.entries(counts)) {
+        if (type === 'elite' || type === 'boss') continue;
+        coins += coinsFor(type) * n;
+      }
+      if (counts.boss) coins += coinsFor('boss');
+    }
+    expect(coins).toBe(649); // 波次构成 × 基础赏金，不含精英溢价；改经济必须同步
+    expect(coins).toBeGreaterThanOrEqual(GUNS.repeater.price); // 320，第 4 波结束已够第一把付费枪
+    expect(coins).toBeLessThan(GUNS.longrifle.price + GUNS.shotgun.price);
+  });
+});
+
+describe('蓄力技能圆心', () => {
+  it('优先使用起手冻结的 skillPos，避免圈在 A、伤害打在 B', () => {
+    const frozen = { x: 3, y: 0, z: -4 };
+    const now = { x: 8, y: 0, z: 2 };
+    expect(skillCenter({ skillPos: frozen, pos: now })).toBe(frozen);
+    expect(skillCenter({ pos: now })).toBe(now);
+    expect(skillCenter({ skillPos: null, pos: now })).toBe(now);
+    expect(skillCenter({ skillPos: undefined, pos: now })).toBe(now);
   });
 });

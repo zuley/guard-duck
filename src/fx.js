@@ -287,9 +287,10 @@ export class FX {
   }
 
   decal(pos, size = 0.5) {
+    // 水面不留焦痕（与弹体落水水花逻辑一致）
+    if (waterSurfaceAt(pos.x, pos.z) !== null) return;
     const d = this.decals.find((x) => x.life <= 0) || this.decals[0];
-    const wy = waterSurfaceAt(pos.x, pos.z);
-    d.m.position.set(pos.x, (wy !== null ? wy : groundHeight(pos.x, pos.z)) + 0.025, pos.z);
+    d.m.position.set(pos.x, groundHeight(pos.x, pos.z) + 0.025, pos.z);
     d.m.rotation.z = Math.random() * 6;
     d.m.scale.setScalar(size);
     d.m.visible = true;

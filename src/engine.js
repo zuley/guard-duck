@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { resolveQuality } from './quality.js';
 
 const GradeShader = {
   uniforms: {
@@ -55,8 +56,9 @@ export class Engine {
     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
     const glRenderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '';
     this.software = /swiftshader|software|llvmpipe|basic render/i.test(String(glRenderer));
-    const cap = this.software ? 0.75 : quality === 'high' ? 1.75 : 1.2;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap));
+    this.preset = resolveQuality(quality, this.software);
+    this.quality = this.preset.id;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.preset.pixelCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -72,7 +74,9 @@ export class Engine {
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight), 0.38, 0.7, 0.82);
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      this.preset.bloomStrength, this.preset.bloomRadius, this.preset.bloomThreshold);
+    this.bloom.enabled = this.preset.bloomEnabled;
     this.composer.addPass(this.bloom);
     this.grade = new ShaderPass(GradeShader);
     this.composer.addPass(this.grade);
@@ -82,6 +86,11 @@ export class Engine {
 
     this.camPos = new THREE.Vector3(0, 11, 8.6);
     this.camLook = new THREE.Vector3(0, 0, 0);
+    this._lead = new THREE.Vector3();
+    this._desiredLook = new THREE.Vector3();
+    this._desiredPos = new THREE.Vector3();
+    this._shakeOff = new THREE.Vector3();
+    this._camOff = new THREE.Vector3(0, 10.6, 8.6);
     this.shake = 0;
     this.damageFlash = 0;
     this.fps = 60;
@@ -101,29 +110,37 @@ export class Engine {
     this.fxaa.material.uniforms.resolution.value.set(1 / (w * pr), 1 / (h * pr));
   }
 
-  setQuality(q) {
-    this.quality = q;
-    const cap = this.software ? 0.75 : q === 'high' ? 1.75 : 1.2;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap));
+  applyPreset(preset) {
+    this.preset = preset;
+    this.quality = preset.id;
+    this.bloom.strength = preset.bloomStrength;
+    this.bloom.radius = preset.bloomRadius;
+    this.bloom.threshold = preset.bloomThreshold;
+    this.bloom.enabled = preset.bloomEnabled;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.pixelCap));
     this.resize();
+  }
+
+  setQuality(q) {
+    this.applyPreset(resolveQuality(q, this.software));
   }
 
   addShake(amount) { this.shake = Math.min(1.2, this.shake + amount); }
 
   updateCamera(dt, focus, aimPoint) {
-    const lead = aimPoint.clone().sub(focus);
+    const lead = this._lead.copy(aimPoint).sub(focus);
     lead.y = 0;
     if (lead.length() > 4.5) lead.setLength(4.5);
-    const desiredLook = focus.clone().add(lead.multiplyScalar(0.4));
+    const desiredLook = this._desiredLook.copy(focus).add(lead.multiplyScalar(0.4));
     desiredLook.y = 0.6;
-    const desiredPos = desiredLook.clone().add(new THREE.Vector3(0, 10.6, 8.6));
+    const desiredPos = this._desiredPos.copy(desiredLook).add(this._camOff);
     const k = 1 - Math.exp(-dt * 5.5);
     this.camPos.lerp(desiredPos, k);
     this.camLook.lerp(desiredLook, k);
     this.shake = Math.max(0, this.shake - dt * 3.2);
     const s = this.shake * this.shake * 0.22;
     const t = performance.now() * 0.001;
-    this.camera.position.copy(this.camPos).add(new THREE.Vector3(
+    this.camera.position.copy(this.camPos).add(this._shakeOff.set(
       Math.sin(t * 47.3) * s, Math.sin(t * 39.1 + 2) * s * 0.7, Math.cos(t * 43.7) * s));
     this.camera.lookAt(this.camLook);
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2.4);

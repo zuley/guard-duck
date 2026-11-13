@@ -27,6 +27,7 @@ document.querySelectorAll('.qualityRow button').forEach((b) => {
     document.querySelectorAll('.qualityRow button').forEach((x) => x.classList.remove('sel'));
     b.classList.add('sel');
     engine.setQuality(b.dataset.q);
+    world.setQuality(b.dataset.q, engine.software);
     audio.uiClick();
   });
 });
@@ -73,18 +74,30 @@ document.getElementById('tabSell').addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+  // 音量滑条等表单控件保留方向键/空格的原生行为
+  const form = e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
+  if (!form && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
   if (e.code === 'Escape' || e.code === 'KeyP') {
     if (game.state === 'playing') game.pause();
     else if (game.state === 'paused') game.resume();
     else if (game.state === 'shop') game.closeShop();
     else if (game.state === 'talent') game.closeTalents();
+    else if (game.state === 'over') {
+      if (e.repeat) return;
+      if (game.overTimer) { clearTimeout(game.overTimer); game.overTimer = null; hud.screen('over'); }
+      else if (e.code === 'Escape') { audio.uiClick(); game.toTitle(); }
+    }
     return;
   }
-  // 死亡结算延迟期内任意键跳过等待，直接出结算
+  // 死亡结算延迟期内任意键跳过等待；结算已出后 Enter 再开局（忽略自动重复）
   if (game.state === 'over') {
-    if (game.overTimer) { clearTimeout(game.overTimer); game.overTimer = null; }
-    hud.screen('over');
+    if (e.repeat) return;
+    if (game.overTimer) {
+      clearTimeout(game.overTimer); game.overTimer = null;
+      hud.screen('over');
+      return;
+    }
+    if (e.code === 'Enter') { audio.init(); audio.uiClick(); game.start(); }
     return;
   }
   if (game.state === 'title') {
@@ -129,7 +142,7 @@ const params = new URLSearchParams(location.search);
 if (params.has('fragile')) game.fragile = true;
 if (params.has('bot')) game.bot = true;
 game.best = game.loadBest(); // 模式确定后按对应档位读纪录
-if (params.has('autostart')) game.start();
+if (params.has('autostart')) { audio.init(); game.start(); }
 
 let last = performance.now();
 let first = true;
