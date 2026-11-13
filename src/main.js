@@ -46,6 +46,19 @@ document.getElementById('retryBtn').addEventListener('click', () => {
 document.getElementById('titleBtn').addEventListener('click', () => {
   audio.uiClick(); game.toTitle();
 });
+const volSlider = document.getElementById('volumeSlider');
+volSlider.addEventListener('input', () => {
+  audio.init();
+  audio.setVolume(+volSlider.value / 100);
+  hud.syncVolume(audio);
+});
+document.getElementById('muteBtn').addEventListener('click', () => {
+  audio.init();
+  audio.toggleMute();
+  hud.syncVolume(audio);
+  audio.uiClick();
+});
+hud.syncVolume(audio);
 document.getElementById('shopClose').addEventListener('click', () => {
   game.closeShop();
 });
@@ -68,37 +81,55 @@ window.addEventListener('keydown', (e) => {
     else if (game.state === 'talent') game.closeTalents();
     return;
   }
-  if (e.code === 'KeyB') {
-    if (game.state === 'playing') game.openShop();
-    else if (game.state === 'shop') game.closeShop();
+  // 死亡结算延迟期内任意键跳过等待，直接出结算
+  if (game.state === 'over') {
+    if (game.overTimer) { clearTimeout(game.overTimer); game.overTimer = null; }
+    hud.screen('over');
     return;
   }
-  if (e.code === 'KeyT') {
-    if (game.state === 'playing') game.openTalents();
-    else if (game.state === 'talent') game.closeTalents();
+  if (game.state === 'title') {
+    if (e.code === 'Enter') { audio.init(); audio.uiClick(); game.start(); }
     return;
   }
+  if (e.code === 'KeyM') {
+    audio.init();
+    const muted = audio.toggleMute();
+    hud.syncVolume(audio);
+    hud.toast(muted ? '已静音' : '声音已开启');
+    return;
+  }
+  // 菜单打开时不记录移动/冲刺键，避免关店瞬间残留触发
+  if (game.state === 'shop' || game.state === 'talent' || game.state === 'paused') {
+    if (e.code === 'KeyB' && game.state === 'shop') game.closeShop();
+    else if (e.code === 'KeyT' && game.state === 'talent') game.closeTalents();
+    return;
+  }
+  if (e.code === 'KeyB') { game.openShop(); return; }
+  if (e.code === 'KeyT') { game.openTalents(); return; }
   if (/^Digit[1-4]$/.test(e.code)) { game.castSkill(+e.code.slice(5)); return; }
   if (e.code === 'KeyQ') { game.cycleGun(-1); return; }
   if (e.code === 'KeyE') { game.cycleGun(1); return; }
   if (e.code === 'F3') { e.preventDefault(); game.showFps = !game.showFps; return; }
-  game.keys.add(e.code);
+  if (game.state === 'playing') game.keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => game.keys.delete(e.code));
 window.addEventListener('mousemove', (e) => { game.mouse.x = e.clientX; game.mouse.y = e.clientY; });
 window.addEventListener('wheel', (e) => { if (game.state === 'playing') game.cycleGun(e.deltaY > 0 ? 1 : -1); }, { passive: true });
 window.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && game.state === 'playing') game.mouse.down = true;
+  if (e.button === 0 && game.state === 'playing') { game.mouseFire = true; game.mouse.down = true; }
 });
-window.addEventListener('mouseup', (e) => { if (e.button === 0) game.mouse.down = false; });
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) { game.mouseFire = false; game.mouse.down = game.padFire || false; }
+});
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('blur', () => game.pause());
 document.addEventListener('visibilitychange', () => { if (document.hidden) game.pause(); });
 
 const params = new URLSearchParams(location.search);
 if (params.has('fragile')) game.fragile = true;
-if (params.has('autostart')) game.start();
 if (params.has('bot')) game.bot = true;
+game.best = game.loadBest(); // 模式确定后按对应档位读纪录
+if (params.has('autostart')) game.start();
 
 let last = performance.now();
 let first = true;

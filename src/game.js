@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
 import { FX } from './fx.js';
-import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, TALENTS, talentNext, talentEffects, SKILLS, applyTalents, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL } from './rules.js';
-import { ARENA, GATES, groundHeight, resolveColliders } from './world.js';
+import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, TALENTS, talentNext, talentEffects, SKILLS, applyTalents, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact } from './rules.js';
+import { ARENA, GATES, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
 import { glowSprite } from './textures.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
@@ -42,8 +42,8 @@ export class Game {
     this.keys = new Set();
     this.mouse = { x: innerWidth / 2, y: innerHeight / 2, down: false };
     this.aimPoint = new THREE.Vector3(0, 0.7, 6);
+    this.impactPoint = new THREE.Vector3(0, 0, 6);
     this.ray = new THREE.Raycaster();
-    this.plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     this._frustum = new THREE.Frustum();
     this._projMat = new THREE.Matrix4();
     this.rng = mulberry32(Date.now() & 0xffff);
@@ -52,6 +52,7 @@ export class Game {
     this.fragile = false;
     this.padAim = null;
     this.padPrev = [];
+    this.mouseFire = false;
     this.best = this.loadBest();
 
     this.playerDuck = new Duck('player', 1);
@@ -69,6 +70,11 @@ export class Game {
     rbar.visible = false;
     this.playerHpBar.group.add(rbar);
     this.playerHpBar.reload = { group: rbar, fill: rfill };
+    const imGeo = new THREE.RingGeometry(0.22, 0.34, 24);
+    imGeo.rotateX(-Math.PI / 2);
+    this.impactMarker = new THREE.Mesh(imGeo, new THREE.MeshBasicMaterial({ color: 0xffd080, transparent: true, opacity: 0.85, depthWrite: false }));
+    this.impactMarker.visible = false;
+    engine.scene.add(this.impactMarker);
     this._bulletGeo = new THREE.CapsuleGeometry(0.03, 0.12, 3, 6);
     this._bulletGeo.rotateX(Math.PI / 2);
     this._bulletMat = new THREE.MeshStandardMaterial({ color: 0xd8b060, roughness: 0.35, metalness: 0.85, emissive: 0x201004 });
@@ -80,8 +86,13 @@ export class Game {
     this.resetStats();
   }
 
+  // 演示(bot)与挑战(fragile)模式成绩与正常模式分档存储，互不污染
+  bestKey() {
+    return this.bot ? 'swyy_best_bot' : this.fragile ? 'swyy_best_fragile' : 'swyy_best';
+  }
+
   loadBest() {
-    try { return JSON.parse(localStorage.getItem('swyy_best')) || null; } catch { return null; }
+    try { return JSON.parse(localStorage.getItem(this.bestKey())) || null; } catch { return null; }
   }
 
   resetStats() {
@@ -106,6 +117,7 @@ export class Game {
     this.mags = { carbine: WEAPON.magSize };
     this.level = 1; this.xp = 0; this.points = 0; this.xpEarned = 0;
     this.talents = {};
+    this.dryT = 0; this.rescued = false; this.overTimer = null;
     this.skillCd = { storm: 0, shield: 0, rage: 0, slow: 0 };
     this.slowT = 0; this.slowFactor = 1;
     this.recomputeLoadout();
@@ -122,12 +134,22 @@ export class Game {
     if (this.fragile) { this.p.maxHp = 1; this.p.hp = Math.min(this.p.hp, 1); }
   }
 
-  start() {
-    for (const e of this.enemies) { this.engine.scene.remove(e.duck.group); if (e.hpBar) this.engine.scene.remove(e.hpBar.group); }
+  clearField() {
+    for (const e of this.enemies) {
+      this.engine.scene.remove(e.duck.group); e.duck.dispose();
+      if (e.hpBar) this.engine.scene.remove(e.hpBar.group);
+    }
     for (const pk of this.pickups) this.engine.scene.remove(pk.mesh);
     for (const b of this.bullets) if (b.vis) this.engine.scene.remove(b.vis);
     for (const b of this.ebullets) if (b.spr) this.engine.scene.remove(b.spr);
     this.enemies = []; this.pickups = []; this.bullets = []; this.ebullets = [];
+  }
+
+  start() {
+    if (this.overTimer) { clearTimeout(this.overTimer); this.overTimer = null; }
+    this.clearField();
+    this.keys.clear(); this.mouse.down = false; this.mouseFire = false;
+    this.best = this.loadBest();
     this.resetStats();
     this.rebuildPlayerDuck();
     this.playerDuck.deathT = -1;
@@ -142,12 +164,11 @@ export class Game {
   }
 
   toTitle() {
+    if (this.overTimer) { clearTimeout(this.overTimer); this.overTimer = null; }
     this.state = 'title';
-    for (const e of this.enemies) { this.engine.scene.remove(e.duck.group); if (e.hpBar) this.engine.scene.remove(e.hpBar.group); }
-    for (const pk of this.pickups) this.engine.scene.remove(pk.mesh);
-    for (const b of this.bullets) if (b.vis) this.engine.scene.remove(b.vis);
-    for (const b of this.ebullets) if (b.spr) this.engine.scene.remove(b.spr);
-    this.enemies = []; this.pickups = []; this.bullets = []; this.ebullets = [];
+    this.clearField();
+    this.keys.clear(); this.mouse.down = false; this.mouseFire = false;
+    this.best = this.loadBest();
     this.resetStats();
     this.rebuildPlayerDuck();
     this.playerDuck.deathT = -1;
@@ -163,7 +184,12 @@ export class Game {
   pause() {
     if (this.state !== 'playing') return;
     this.state = 'paused';
+    // 清输入状态：切窗后窗外的 keyup/mouseup 到不了页面，避免恢复时自动走火/走路
+    this.keys.clear();
+    this.mouse.down = false;
+    this.mouseFire = false;
     this.hud.screen('pause');
+    this.hud.syncVolume(this.audio);
   }
 
   resume() {
@@ -178,6 +204,8 @@ export class Game {
     if (this.state !== 'playing') return;
     this.state = 'shop';
     this.mouse.down = false;
+    this.mouseFire = false;
+    this.keys.clear();
     this.hud.shopOpen(true);
     this.hud.renderShop(this);
     this.audio.uiClick();
@@ -186,6 +214,7 @@ export class Game {
   closeShop() {
     if (this.state !== 'shop') return;
     this.state = 'playing';
+    this.keys.clear(); // 商店里按过的空格/方向键不得残留成冲刺/移动
     this.hud.shopOpen(false);
     this.audio.uiClick();
   }
@@ -235,6 +264,7 @@ export class Game {
   }
 
   cycleGun(dir) {
+    if (this.state !== 'playing') return; // 商店/天赋/暂停时不得切枪
     const order = Object.keys(GUNS).filter((id) => this.ownedGuns.includes(id));
     if (order.length < 2) return;
     const i = order.indexOf(this.gunId);
@@ -280,6 +310,8 @@ export class Game {
     if (this.state !== 'playing') return;
     this.state = 'talent';
     this.mouse.down = false;
+    this.mouseFire = false;
+    this.keys.clear();
     this.hud.talentOpen(true);
     this.hud.renderTalents(this);
     this.audio.uiClick();
@@ -288,6 +320,7 @@ export class Game {
   closeTalents() {
     if (this.state !== 'talent') return;
     this.state = 'playing';
+    this.keys.clear();
     this.hud.talentOpen(false);
     this.audio.uiClick();
   }
@@ -366,6 +399,7 @@ export class Game {
     duck.setGear(this.gear);
     this.engine.scene.remove(old.group);
     this.engine.scene.add(duck.group);
+    old.dispose();
     this.playerDuck = duck;
   }
 
@@ -384,6 +418,7 @@ export class Game {
       this.playerDuck.group.position.set(0, 0, 3);
       this.playerDuck.update(dt, { aimYaw: Math.sin(this.t * 0.4) * 0.7, moving: false });
       this.playerHpBar.group.visible = false;
+      this.impactMarker.visible = false;
       this.hud.crosshair(0, 0, 0, false);
       return;
     }
@@ -418,7 +453,18 @@ export class Game {
     this.hud.skills(this.loadout.skills, this.skillCd, { rage: p.rageT, shield: p.shieldT, slow: this.slowT });
     this.hud.shield(p.shield, this.loadout.shield.pool, p.shieldT);
     const spread = this.spreadNow();
-    this.hud.crosshair(this.mouse.x, this.mouse.y, 7 + spread * 520, this.state === 'playing');
+    // 准星只是方向：鼠标瞄准时钉在指针处、手柄瞄准时取虚拟瞄准点的投影，
+    // 绝不吸附到弹道落点。真实落点由地面琥珀环 + 曳光 + 弹着贴花单独传达。
+    let cx, cy;
+    if (this.padAim) {
+      const v = this.aimPoint.clone().project(this.engine.camera);
+      cx = (v.x * 0.5 + 0.5) * innerWidth;
+      cy = (-v.y * 0.5 + 0.5) * innerHeight;
+    } else {
+      cx = this.mouse.x;
+      cy = this.mouse.y;
+    }
+    this.hud.crosshair(cx, cy, 7 + spread * 520, this.state === 'playing');
     this.hud.fps(this.engine.fps, this.showFps);
   }
 
@@ -465,17 +511,54 @@ export class Game {
     p.pos.y = 0;
     p.moving = p.vel.length() > 0.6;
 
-    // 瞄准（手柄右摇杆优先）
+    // 瞄准（手柄右摇杆优先）：鼠标射线取敌人表面，否则取地面；准星只指示方向，真实落点另用标记
     if (this.padAim) {
       this.aimPoint.set(p.pos.x + this.padAim.x * 10, 0.7, p.pos.z + this.padAim.z * 10);
     } else {
       const ndc = new THREE.Vector2(
         (this.mouse.x / innerWidth) * 2 - 1, -(this.mouse.y / innerHeight) * 2 + 1);
       this.ray.setFromCamera(ndc, this.engine.camera);
-      const hit = this.ray.ray.intersectPlane(this.plane, this.aimPoint);
-      if (!hit) this.aimPoint.set(p.pos.x, 0, p.pos.z - 12);
+      const ro = this.ray.ray.origin, rd = this.ray.ray.direction;
+      let bestT = Infinity;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const t = raySphereT(ro.x, ro.y, ro.z, rd.x, rd.y, rd.z, e.pos.x, 0.75 * e.scale, e.pos.z, 0.8 * e.scale);
+        if (t > 0 && t < bestT) bestT = t;
+      }
+      if (bestT < Infinity) this.aimPoint.copy(ro).addScaledVector(rd, bestT);
+      else if (rd.y < -1e-4) {
+        this.aimPoint.copy(ro).addScaledVector(rd, -ro.y / rd.y);
+        this.aimPoint.y = groundHeight(this.aimPoint.x, this.aimPoint.z);
+      } else {
+        // 射线朝天（指向天空）：沿当前朝向延伸，不再硬跳世界正北造成准星瞬移
+        this.aimPoint.set(p.pos.x + Math.sin(p.aimYaw) * 12, 0.7, p.pos.z + Math.cos(p.aimYaw) * 12);
+      }
     }
     p.aimYaw = Math.atan2(this.aimPoint.x - p.pos.x, this.aimPoint.z - p.pos.z);
+
+    // 弹道落点预测：与子弹判定同规则步进，供准星显示
+    const muzzle = this.playerDuck.muzzleWorld(new THREE.Vector3());
+    const bdir = this.aimPoint.clone().sub(muzzle);
+    if (bdir.lengthSq() < 1e-8) bdir.set(0, 0, 1); else bdir.normalize();
+    const targets = [];
+    for (const e of this.enemies) {
+      if (!e.dead) targets.push({ x: e.pos.x, z: e.pos.z, radius: e.radius + 0.22, height: 1.7 * e.scale });
+    }
+    const imp = marchImpact(muzzle, bdir, this.loadout.range, targets,
+      (x, z) => pointBlocked(x, z, this.world.colliders),
+      (x, z) => { const wy = waterSurfaceAt(x, z); return wy !== null ? wy : groundHeight(x, z); }, 0.5);
+    // 地面命中时弹道直线恰止于地面瞄准点，消除步进粒度误差，保证准星与鼠标地面点重合
+    if (imp.hit === 'ground' && this.aimPoint.y <= groundHeight(this.aimPoint.x, this.aimPoint.z) + 0.05) {
+      this.impactPoint.copy(this.aimPoint);
+    } else if (imp.hit === 'none') {
+      // 超出射程：子弹在射程末端坠地，落点标记显示短落点
+      this.impactPoint.set(imp.x, groundHeight(imp.x, imp.z), imp.z);
+    } else {
+      this.impactPoint.set(imp.x, imp.y, imp.z);
+    }
+    const markGap = Math.hypot(this.impactPoint.x - this.aimPoint.x, this.impactPoint.z - this.aimPoint.z);
+    this.impactMarker.visible = markGap > 0.5;
+    this.impactMarker.position.set(this.impactPoint.x, groundHeight(this.impactPoint.x, this.impactPoint.z) + 0.03, this.impactPoint.z);
 
     // 射击 / 换弹
     p.fireT = Math.max(0, p.fireT - dt);
@@ -495,6 +578,19 @@ export class Game {
 
     // 缓慢自愈
     if (this.time - p.lastHurt > 6 && p.hp > 0) p.hp = Math.min(p.maxHp, p.hp + 4 * dt);
+
+    // 弹药死锁救援：弹匣+备弹打空后无法击杀→无掉落，6 秒后在脚边补给出一个弹药箱（每波一次）
+    if (p.mag + p.reserve <= 0) {
+      this.dryT += dt;
+      if (this.dryT > 6 && !this.rescued) {
+        this.rescued = true;
+        this.spawnPickup(p.pos.clone(), 'ammo');
+        this.hud.toast('弹药耗尽！紧急补给已送达脚边');
+        this.audio.pickup();
+      }
+    } else {
+      this.dryT = 0;
+    }
 
     this.playerDuck.group.position.copy(p.pos);
     this.playerDuck.update(dt, {
@@ -554,7 +650,7 @@ export class Game {
     const p = this.p;
     if (p.reloadT > 0 || p.mag >= this.loadout.magSize || p.reserve <= 0) return;
     p.reloadT = this.loadout.reloadTime;
-    this.audio.reload();
+    this.audio.reload(this.loadout.reloadTime);
   }
 
   fire() {
@@ -575,7 +671,7 @@ export class Game {
       d.applyAxisAngle(up, (Math.random() - 0.5) * (spread * 2 + (lo.pellets > 1 ? (lo.gun.pelletSpread ?? 0.14) : 0)));
       d.y += (Math.random() - 0.5) * spread;
       d.normalize();
-      const b = { pos: origin.clone(), vel: d.multiplyScalar(lo.bulletSpeed), life: 1.1, traveled: 0, dmg };
+      const b = { pos: origin.clone(), vel: d.multiplyScalar(lo.bulletSpeed), life: 1.1, traveled: 0, range: lo.range, dmg };
       b.vis = this.makeBulletVis(raging ? 0xffb040 : 0xffd080, 1.6);
       b.vis.position.copy(b.pos);
       b.vis.lookAt(b.pos.clone().add(b.vel));
@@ -617,18 +713,19 @@ export class Game {
       this.fx.ring(p.pos.clone().setY(0.5), 0xff8060, 3);
       this.audio.gameOver();
       this.audio.stopMusic();
-      const isRecord = !this.best || this.score > this.best.score;
+      // 0 分不写纪录（避免占坑）；平纪录也算新纪录
+      const isRecord = this.score > 0 && (!this.best || this.score >= this.best.score);
       if (isRecord) {
         this.best = { score: this.score, wave: this.wave, kills: this.kills };
-        try { localStorage.setItem('swyy_best', JSON.stringify(this.best)); } catch { /* 存储不可用时忽略 */ }
+        try { localStorage.setItem(this.bestKey(), JSON.stringify(this.best)); } catch { /* 存储不可用时忽略 */ }
       }
       this.hud.results({
         wave: this.wave, kills: this.kills, score: this.score,
         acc: this.shots ? this.hits / this.shots : 0,
         time: this.time, coins: this.coinsEarned,
-        best: this.best.score, isRecord,
+        best: this.best ? this.best.score : 0, isRecord,
       });
-      setTimeout(() => { if (this.state === 'over') this.hud.screen('over'); }, 1100);
+      this.overTimer = setTimeout(() => { if (this.state === 'over') this.hud.screen('over'); }, 1100);
     }
   }
 
@@ -676,6 +773,7 @@ export class Game {
     this.spawnQueue = q;
     this.spawnT = 0.4;
     this.waveState = 'fight';
+    this.rescued = false; this.dryT = 0;
     this.hud.banner(this.wave, waveIntro(this.wave));
     this.audio.waveHorn();
   }
@@ -749,10 +847,46 @@ export class Game {
     this.hud.threat(innerWidth / 2 + ux * k, innerHeight / 2 + uz * k);
   }
 
+  // 菜单手柄导航：方向键/D-pad 移动焦点，A 确认；焦点环复用 :focus 样式
+  menuFocusables() {
+    const sel = {
+      shop: '#shopScreen .shopTabs button, #shopScreen .tile, #shopClose',
+      talent: '#talentScreen .tnode button:not(:disabled), #talentClose',
+      paused: '#pauseScreen button, #pauseScreen input',
+    }[this.state];
+    if (!sel) return [];
+    return [...document.querySelectorAll(sel)].filter((el) => {
+      if (el.disabled || el.closest('.hidden')) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+  }
+
+  menuNavigate(dx, dy) {
+    const list = this.menuFocusables();
+    if (!list.length) return;
+    const cur = list.indexOf(document.activeElement);
+    if (cur < 0) { list[0].focus(); return; }
+    const cr = list[cur].getBoundingClientRect();
+    const cx = cr.x + cr.width / 2, cy = cr.y + cr.height / 2;
+    let best = null, bestScore = Infinity;
+    for (const el of list) {
+      if (el === list[cur]) continue;
+      const r = el.getBoundingClientRect();
+      const vx = r.x + r.width / 2 - cx, vy = r.y + r.height / 2 - cy;
+      const along = vx * dx + vy * dy;
+      if (along <= 4) continue;
+      const perp = Math.abs(vx * dy - vy * dx);
+      const score = along + perp * 2.5;
+      if (score < bestScore) { bestScore = score; best = el; }
+    }
+    if (best) best.focus();
+  }
+
   pollGamepad() {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     const gp = pads && pads[0];
-    if (!gp) { this.padAim = null; return; }
+    if (!gp) { this.padAim = null; this.padFire = false; return; }
     const prev = this.padPrev;
     const btn = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
     const edge = (i) => btn(i) && !prev[i];
@@ -763,12 +897,16 @@ export class Game {
     if (this.state === 'title' || this.state === 'over') {
       if (edge(0)) { this.audio.init(); this.start(); }
     } else if (this.state === 'playing') {
+      // 手柄与键鼠共存：摇杆有输入才接管移动，扳机与鼠标左键并联，互不清零
       const k = this.keys;
-      for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) k.delete(c);
-      if (lx > 0.35) k.add('KeyD'); else if (lx < -0.35) k.add('KeyA');
-      if (ly > 0.35) k.add('KeyS'); else if (ly < -0.35) k.add('KeyW');
+      if (lx || ly) {
+        for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) k.delete(c);
+        if (lx > 0.35) k.add('KeyD'); else if (lx < -0.35) k.add('KeyA');
+        if (ly > 0.35) k.add('KeyS'); else if (ly < -0.35) k.add('KeyW');
+      }
       this.padAim = (rx || ry) ? { x: rx, z: ry } : null;
-      this.mouse.down = btn(7) || btn(6);
+      this.padFire = btn(7) || btn(6);
+      this.mouse.down = this.mouseFire || this.padFire;
       if (edge(0)) k.add('Space');
       if (edge(2)) k.add('KeyR');
       if (edge(1)) this.openShop();
@@ -776,12 +914,34 @@ export class Game {
       if (edge(9)) this.pause();
       if (edge(4)) this.cycleGun(-1);
       if (edge(5)) this.cycleGun(1);
-    } else if (this.state === 'shop') {
-      if (edge(1) || edge(9)) this.closeShop();
-    } else if (this.state === 'talent') {
-      if (edge(3) || edge(1) || edge(9)) this.closeTalents();
-    } else if (this.state === 'paused') {
-      if (edge(9) || edge(0)) this.resume();
+    } else if (this.state === 'shop' || this.state === 'talent' || this.state === 'paused') {
+      // 菜单内：方向导航 + A 确认 + B/Start 返回
+      const now = this.t;
+      const nx = (lx > 0.55 || btn(15)) ? 1 : (lx < -0.55 || btn(14)) ? -1 : 0;
+      const ny = (ly > 0.55 || btn(13)) ? 1 : (ly < -0.55 || btn(12)) ? -1 : 0;
+      if ((nx || ny) && now - (this.padNavT || 0) > 0.24) {
+        this.padNavT = now;
+        const ae = document.activeElement;
+        if (ae && ae.type === 'range' && nx) {
+          // 焦点在音量滑条上：左右直接调音量
+          ae.value = String(Math.min(100, Math.max(0, +ae.value + nx * 5)));
+          ae.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          this.menuNavigate(nx, ny);
+        }
+      }
+      if (edge(0)) {
+        const list = this.menuFocusables();
+        const el = list.includes(document.activeElement) ? document.activeElement : list[0];
+        if (el) {
+          if (el.tagName === 'INPUT') el.focus();
+          else el.click();
+          if (el.tagName === 'BUTTON' && !el.closest('.tile')) el.blur();
+        }
+      }
+      if (this.state === 'shop' && (edge(1) || edge(9))) this.closeShop();
+      else if (this.state === 'talent' && (edge(3) || edge(1) || edge(9))) this.closeTalents();
+      else if (this.state === 'paused' && (edge(9) || edge(1))) this.resume();
     }
     this.padPrev = gp.buttons.map((b) => b.pressed);
   }
@@ -813,7 +973,8 @@ export class Game {
           e.skillT = sk.windup; e.skillCd = sk.cd;
           this.fx.zone(e.pos.clone(), sk.radius, e.skillKind === 'nova' ? 0xff4646 : 0xffa040, sk.windup);
           this.audio.skillCast();
-          this.hud.toast(e.skillKind === 'nova' ? '鸭王蓄力全图冲击波！看准时机冲刺闪避' : '精英蓄力战争践踏！快出圈');
+          // 保命预警走独立高优先级通道，不被技能/拾取 toast 覆盖
+          this.hud.alert(e.skillKind === 'nova' ? '⚠ 鸭王蓄力全图冲击波！看准时机冲刺闪避' : '⚠ 精英蓄力战争践踏！快出圈', sk.windup * 1000 + 500);
         }
       }
 
@@ -825,7 +986,8 @@ export class Game {
           if (e.windup <= 0) {
             e.duck.kick();
             this.audio.swing();
-            if (dist < e.reach + 0.35) {
+            // 挥击需视线畅通：隔着谷仓拐角等掩体不再命中
+            if (dist < e.reach + 0.35 && !segBlocked(e.pos, p.pos, this.world.colliders)) {
               this.damagePlayer(e.damage);
               this.fx.ring(p.pos.clone().setY(0.4), 0xff9060, 1.4);
               this.fx.spark(p.pos.clone().setY(0.7), dirN.clone().multiplyScalar(-0.5), 5, 0xffb080, 4);
@@ -902,6 +1064,7 @@ export class Game {
       const e = this.enemies[i];
       if (e.dead && e.duck.deathT > 1.5) {
         this.engine.scene.remove(e.duck.group);
+        e.duck.dispose();
         if (e.hpBar) this.engine.scene.remove(e.hpBar.group);
         this.enemies.splice(i, 1);
       }
@@ -1003,10 +1166,24 @@ export class Game {
             this.fx.smoke(b.pos, 1, 0x8a8078, 0.25, 1.4, 0.4);
             gone = true;
           }
-          if (!gone && b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
+          if (!gone) {
+            const wy = waterSurfaceAt(b.pos.x, b.pos.z);
+            if (wy !== null && b.pos.y <= wy + 0.04) {
+              // 落水：白色水花，不产生焦痕
+              this.fx.smoke(b.pos, 2, 0xd8ece8, 0.3, 1.5, 0.5);
+              this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 5, 0xbfe8e0, 3);
+              gone = true;
+            } else if (b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
+              this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
+              this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, 0xc8b080, 3);
+              this.fx.decal(b.pos, 0.28);
+              gone = true;
+            }
+          }
+          if (!gone && b.traveled >= b.range) {
             this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
-            this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, 0xc8b080, 3);
-            this.fx.decal(b.pos, 0.28);
+            const wy = waterSurfaceAt(b.pos.x, b.pos.z);
+            this.fx.decal(new THREE.Vector3(b.pos.x, wy !== null ? wy : groundHeight(b.pos.x, b.pos.z), b.pos.z), 0.28);
             gone = true;
           }
         }
@@ -1038,9 +1215,15 @@ export class Game {
             this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.5), 4, 0xffa060, 4);
             gone = true;
           }
-          if (!gone && b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
-            this.fx.smoke(b.pos, 1, 0xa08a68, 0.22, 1.4, 0.4);
-            gone = true;
+          if (!gone) {
+            const wy = waterSurfaceAt(b.pos.x, b.pos.z);
+            if (wy !== null && b.pos.y <= wy + 0.04) {
+              this.fx.smoke(b.pos, 1, 0xd8ece8, 0.22, 1.4, 0.4);
+              gone = true;
+            } else if (b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
+              this.fx.smoke(b.pos, 1, 0xa08a68, 0.22, 1.4, 0.4);
+              gone = true;
+            }
           }
         }
       }

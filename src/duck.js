@@ -7,8 +7,28 @@ export const PALETTES = {
   tank: { body: 0xa8763e, wing: 0x96662e, beak: 0xc07020, feet: 0xc07020, brow: 0x141414, eye: 0xff3020, rim: 0xffa060, accessory: 'helmet' },
 };
 
+// 几何体 / 材质全局缓存：同参数的部件跨鸭子共享，避免刷怪 / 切枪 / 重开时
+// GPU 资源只增不减（无尽波次下显存持续上涨）。共享资源不随单只鸭子销毁。
+const geoCache = new Map();
+function geo(Ctor, ...args) {
+  const key = Ctor.name + ':' + args.join(',');
+  let g = geoCache.get(key);
+  if (!g) { g = new Ctor(...args); geoCache.set(key, g); }
+  return g;
+}
+const matCache = new Map();
+function stdMat(params) {
+  const key = JSON.stringify(params);
+  let m = matCache.get(key);
+  if (!m) { m = new THREE.MeshStandardMaterial(params); matCache.set(key, m); }
+  return m;
+}
+const rimCache = new Map();
 function duckMaterial(color, rim) {
-  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0 });
+  const key = color + ':' + rim;
+  let m = rimCache.get(key);
+  if (m) return m;
+  m = new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0 });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uRim = { value: new THREE.Color(rim) };
     sh.fragmentShader = 'uniform vec3 uRim;\n' + sh.fragmentShader.replace(
@@ -17,8 +37,10 @@ function duckMaterial(color, rim) {
        float rimF = pow(1.0 - saturate(dot(normalize(vNormal), normalize(vViewPosition))), 2.6);
        totalEmissiveRadiance += uRim * rimF * 0.32;`);
   };
+  rimCache.set(key, m);
   return m;
 }
+const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
 const lerpAngle = (a, b, t) => {
   let d = (b - a) % (Math.PI * 2);
@@ -40,8 +62,8 @@ export class Duck {
     const bodyMat = duckMaterial(p.body, p.rim);
     const wingMat = duckMaterial(p.wing, p.rim);
     const beakMat = duckMaterial(p.beak, p.rim);
-    const darkMat = new THREE.MeshStandardMaterial({ color: p.brow, roughness: 0.5 });
-    const eyeMat = new THREE.MeshStandardMaterial({
+    const darkMat = stdMat({ color: p.brow, roughness: 0.5 });
+    const eyeMat = stdMat({
       color: p.eye, roughness: 0.25,
       emissive: palette === 'player' ? 0x000000 : p.eye, emissiveIntensity: 0.7,
     });
@@ -49,11 +71,11 @@ export class Duck {
     this.body = new THREE.Group();
     this.body.position.y = 0.42;
     this.root.add(this.body);
-    const torso = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 18), bodyMat);
+    const torso = new THREE.Mesh(geo(THREE.SphereGeometry,0.42, 24, 18), bodyMat);
     torso.scale.set(1, 0.92, 1.12);
     torso.castShadow = true;
     this.body.add(torso);
-    const tail = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), bodyMat);
+    const tail = new THREE.Mesh(geo(THREE.SphereGeometry,0.16, 12, 10), bodyMat);
     tail.scale.set(0.8, 0.7, 1.2);
     tail.position.set(0, 0.14, -0.44);
     tail.rotation.x = -0.5;
@@ -64,7 +86,7 @@ export class Duck {
     for (const side of [-1, 1]) {
       const w = new THREE.Group();
       w.position.set(side * 0.38, 0.06, 0.02);
-      const wm = new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 12), wingMat);
+      const wm = new THREE.Mesh(geo(THREE.SphereGeometry,0.2, 14, 12), wingMat);
       wm.scale.set(0.45, 0.85, 1.05);
       wm.position.set(side * 0.06, -0.06, 0);
       wm.castShadow = true;
@@ -76,86 +98,85 @@ export class Duck {
     this.head = new THREE.Group();
     this.head.position.set(0, 0.86, 0.1);
     this.root.add(this.head);
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.34, 24, 18), bodyMat);
+    const skull = new THREE.Mesh(geo(THREE.SphereGeometry,0.34, 24, 18), bodyMat);
     skull.scale.set(1, 0.95, 1);
     skull.castShadow = true;
     this.head.add(skull);
     const tuftPos = [[-0.11, 0.3, 0, 0.085], [0.01, 0.35, 0, 0.1], [0.12, 0.29, 0, 0.075]];
     for (const [x, y, z, r] of tuftPos) {
-      const t = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), bodyMat);
+      const t = new THREE.Mesh(geo(THREE.SphereGeometry,r, 10, 8), bodyMat);
       t.position.set(x, y, z);
       t.castShadow = true;
       this.head.add(t);
     }
     this.eyes = [];
     for (const side of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.048, 10, 8), eyeMat);
+      const eye = new THREE.Mesh(geo(THREE.SphereGeometry,0.048, 10, 8), eyeMat);
       eye.position.set(side * 0.13, 0.05, 0.3);
       this.head.add(eye);
       this.eyes.push(eye);
-      const glint = new THREE.Mesh(new THREE.SphereGeometry(0.015, 6, 5),
-        new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      const glint = new THREE.Mesh(geo(THREE.SphereGeometry,0.015, 6, 5), glintMat);
       glint.position.set(side * 0.13 + 0.016, 0.068, 0.34);
       this.head.add(glint);
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.05, 0.05), darkMat);
+      const brow = new THREE.Mesh(geo(THREE.BoxGeometry,0.17, 0.05, 0.05), darkMat);
       brow.position.set(side * 0.13, 0.165, 0.31);
       brow.rotation.z = side * 0.38;
       this.head.add(brow);
     }
-    const beak = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), beakMat);
+    const beak = new THREE.Mesh(geo(THREE.SphereGeometry,0.16, 16, 12), beakMat);
     beak.scale.set(1.25, 0.62, 1.0);
     beak.position.set(0, -0.07, 0.33);
     beak.castShadow = true;
     this.head.add(beak);
-    const beakTop = new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 10), duckMaterial(0xffab4a, p.rim));
+    const beakTop = new THREE.Mesh(geo(THREE.SphereGeometry,0.15, 14, 10), duckMaterial(0xffab4a, p.rim));
     beakTop.scale.set(1.05, 0.4, 0.82);
     beakTop.position.set(0, -0.02, 0.35);
     this.head.add(beakTop);
     for (const side of [-1, 1]) {
-      const n = new THREE.Mesh(new THREE.SphereGeometry(0.014, 6, 5), darkMat);
+      const n = new THREE.Mesh(geo(THREE.SphereGeometry,0.014, 6, 5), darkMat);
       n.position.set(side * 0.05, -0.005, 0.475);
       this.head.add(n);
     }
 
     if (p.accessory === 'bandana') {
-      const band = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.42),
-        new THREE.MeshStandardMaterial({ color: 0xb03028, roughness: 0.8 }));
+      const band = new THREE.Mesh(geo(THREE.SphereGeometry,0.35, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.42),
+        stdMat({ color: 0xb03028, roughness: 0.8 }));
       band.position.y = 0.06;
       band.castShadow = true;
       this.head.add(band);
-      const knot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6),
-        new THREE.MeshStandardMaterial({ color: 0x8a2018, roughness: 0.8 }));
+      const knot = new THREE.Mesh(geo(THREE.SphereGeometry,0.07, 8, 6),
+        stdMat({ color: 0x8a2018, roughness: 0.8 }));
       knot.position.set(0.3, 0.12, -0.12);
       this.head.add(knot);
     } else if (p.accessory === 'headband') {
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.33, 0.045, 8, 20),
-        new THREE.MeshStandardMaterial({ color: 0xe8e4d8, roughness: 0.85 }));
+      const band = new THREE.Mesh(geo(THREE.TorusGeometry,0.33, 0.045, 8, 20),
+        stdMat({ color: 0xe8e4d8, roughness: 0.85 }));
       band.rotation.x = Math.PI / 2 - 0.25;
       band.position.y = 0.12;
       this.head.add(band);
     } else if (p.accessory === 'helmet') {
-      const helm = new THREE.Mesh(new THREE.SphereGeometry(0.37, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
-        new THREE.MeshStandardMaterial({ color: 0x6a6f76, roughness: 0.4, metalness: 0.8 }));
+      const helm = new THREE.Mesh(geo(THREE.SphereGeometry,0.37, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
+        stdMat({ color: 0x6a6f76, roughness: 0.4, metalness: 0.8 }));
       helm.position.y = 0.08;
       helm.castShadow = true;
       this.head.add(helm);
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.03, 6, 20),
-        new THREE.MeshStandardMaterial({ color: 0x565b62, roughness: 0.4, metalness: 0.8 }));
+      const rim = new THREE.Mesh(geo(THREE.TorusGeometry,0.36, 0.03, 6, 20),
+        stdMat({ color: 0x565b62, roughness: 0.4, metalness: 0.8 }));
       rim.rotation.x = Math.PI / 2;
       rim.position.y = 0.09;
       this.head.add(rim);
     }
 
     if (opts.boss) {
-      const gold = new THREE.MeshStandardMaterial({ color: 0xffd24a, roughness: 0.25, metalness: 0.9, emissive: 0x604000, emissiveIntensity: 0.4 });
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.05, 8, 20), gold);
+      const gold = stdMat({ color: 0xffd24a, roughness: 0.25, metalness: 0.9, emissive: 0x604000, emissiveIntensity: 0.4 });
+      const ring = new THREE.Mesh(geo(THREE.TorusGeometry,0.22, 0.05, 8, 20), gold);
       ring.rotation.x = Math.PI / 2;
       ring.position.y = 0.44;
       ring.castShadow = true;
       this.head.add(ring);
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2;
-        const spike = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.18, 6), gold);
+        const spike = new THREE.Mesh(geo(THREE.ConeGeometry,0.05, 0.18, 6), gold);
         spike.position.set(Math.cos(a) * 0.2, 0.55, Math.sin(a) * 0.2);
         spike.castShadow = true;
         this.head.add(spike);
@@ -163,9 +184,9 @@ export class Duck {
     }
 
     if (opts.elite) {
-      const red = new THREE.MeshStandardMaterial({ color: 0xd03028, roughness: 0.6, emissive: 0x501008, emissiveIntensity: 0.5 });
+      const red = stdMat({ color: 0xd03028, roughness: 0.6, emissive: 0x501008, emissiveIntensity: 0.5 });
       for (let i = 0; i < 4; i++) {
-        const spike = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.3 - i * 0.05, 6), red);
+        const spike = new THREE.Mesh(geo(THREE.ConeGeometry,0.06, 0.3 - i * 0.05, 6), red);
         spike.position.set(0, 0.42, 0.18 - i * 0.12);
         spike.castShadow = true;
         this.head.add(spike);
@@ -176,13 +197,13 @@ export class Duck {
     for (const side of [-1, 1]) {
       const f = new THREE.Group();
       f.position.set(side * 0.16, 0.07, 0.04);
-      const fm = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), beakMat);
+      const fm = new THREE.Mesh(geo(THREE.SphereGeometry,0.12, 12, 8), beakMat);
       fm.scale.set(0.9, 0.42, 1.4);
       fm.position.z = 0.05;
       fm.castShadow = true;
       f.add(fm);
       for (let t = -1; t <= 1; t++) {
-        const toe = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), beakMat);
+        const toe = new THREE.Mesh(geo(THREE.SphereGeometry,0.045, 8, 6), beakMat);
         toe.scale.set(0.8, 0.4, 1.2);
         toe.position.set(t * 0.07, -0.01, 0.2);
         f.add(toe);
@@ -195,58 +216,58 @@ export class Duck {
     this.magMesh = null;
     this.muzzle = null;
     this.melee = this.weapon === 'fists' || this.weapon === 'club' || this.weapon === 'knife';
-    const gunMetal = new THREE.MeshStandardMaterial({ color: 0x3a3f46, roughness: 0.42, metalness: 0.8 });
-    const gunWood = new THREE.MeshStandardMaterial({ color: 0x7a4a26, roughness: 0.7 });
+    const gunMetal = stdMat({ color: 0x3a3f46, roughness: 0.42, metalness: 0.8 });
+    const gunWood = stdMat({ color: 0x7a4a26, roughness: 0.7 });
     if (this.weapon === 'pistol' || this.weapon === 'rifle' || this.weapon === 'shotgun') {
       this.gun = new THREE.Group();
       if (this.weapon === 'pistol') {
-        const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 0.24), gunMetal);
+        const receiver = new THREE.Mesh(geo(THREE.BoxGeometry,0.08, 0.11, 0.24), gunMetal);
         receiver.castShadow = true;
         this.gun.add(receiver);
-        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.14, 10), gunMetal);
+        const barrel = new THREE.Mesh(geo(THREE.CylinderGeometry,0.024, 0.024, 0.14, 10), gunMetal);
         barrel.rotation.x = Math.PI / 2;
         barrel.position.set(0, 0.03, 0.18);
         this.gun.add(barrel);
-        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.16, 0.09), gunWood);
+        const grip = new THREE.Mesh(geo(THREE.BoxGeometry,0.07, 0.16, 0.09), gunWood);
         grip.position.set(0, -0.11, -0.08);
         grip.rotation.x = 0.3;
         this.gun.add(grip);
       } else {
-        const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.13, 0.46), gunMetal);
+        const receiver = new THREE.Mesh(geo(THREE.BoxGeometry,0.09, 0.13, 0.46), gunMetal);
         receiver.castShadow = true;
         this.gun.add(receiver);
-        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(
+        const barrel = new THREE.Mesh(geo(THREE.CylinderGeometry,
           this.weapon === 'shotgun' ? 0.042 : 0.028,
           this.weapon === 'shotgun' ? 0.042 : 0.028, 0.36, 10), gunMetal);
         barrel.rotation.x = Math.PI / 2;
         barrel.position.set(0, 0.02, 0.4);
         this.gun.add(barrel);
-        const hand = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.09, 0.2), gunWood);
+        const hand = new THREE.Mesh(geo(THREE.BoxGeometry,0.1, 0.09, 0.2), gunWood);
         hand.position.set(0, -0.01, 0.24);
         this.gun.add(hand);
         if (this.weapon === 'shotgun') {
-          const pump = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.1, 0.16), gunWood);
+          const pump = new THREE.Mesh(geo(THREE.BoxGeometry,0.11, 0.1, 0.16), gunWood);
           pump.position.set(0, -0.03, 0.32);
           this.gun.add(pump);
         } else {
-          const mag = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.18, 0.1), gunMetal);
+          const mag = new THREE.Mesh(geo(THREE.BoxGeometry,0.07, 0.18, 0.1), gunMetal);
           mag.position.set(0, -0.14, 0.02);
           mag.rotation.x = 0.18;
           this.gun.add(mag);
           this.magMesh = mag;
-          const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.02), gunMetal);
+          const sight = new THREE.Mesh(geo(THREE.BoxGeometry,0.02, 0.05, 0.02), gunMetal);
           sight.position.set(0, 0.09, 0.3);
           this.gun.add(sight);
         }
-        const stock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 0.2), gunWood);
+        const stock = new THREE.Mesh(geo(THREE.BoxGeometry,0.08, 0.11, 0.2), gunWood);
         stock.position.set(0, -0.02, -0.3);
         this.gun.add(stock);
       }
-      const gripF = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 10), wingMat);
+      const gripF = new THREE.Mesh(geo(THREE.SphereGeometry,0.1, 12, 10), wingMat);
       gripF.scale.set(0.7, 0.9, 1.2);
       gripF.position.set(0, -0.04, this.weapon === 'pistol' ? -0.06 : 0.24);
       this.gun.add(gripF);
-      const gripR = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), wingMat);
+      const gripR = new THREE.Mesh(geo(THREE.SphereGeometry,0.09, 12, 10), wingMat);
       gripR.scale.set(0.7, 0.9, 1.1);
       gripR.position.set(0.02, -0.06, -0.1);
       this.gun.add(gripR);
@@ -261,30 +282,30 @@ export class Duck {
     } else if (this.weapon === 'club' || this.weapon === 'knife') {
       const w = new THREE.Group();
       if (this.weapon === 'club') {
-        const clubWood = new THREE.MeshStandardMaterial({ color: 0x8a5a2e, roughness: 0.75 });
-        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 0.62, 8), clubWood);
+        const clubWood = stdMat({ color: 0x8a5a2e, roughness: 0.75 });
+        const shaft = new THREE.Mesh(geo(THREE.CylinderGeometry,0.035, 0.05, 0.62, 8), clubWood);
         shaft.rotation.x = Math.PI / 2;
         shaft.position.z = 0.32;
         shaft.castShadow = true;
         w.add(shaft);
-        const knob = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), clubWood);
+        const knob = new THREE.Mesh(geo(THREE.SphereGeometry,0.075, 10, 8), clubWood);
         knob.scale.set(1, 1, 1.25);
         knob.position.z = 0.64;
         knob.castShadow = true;
         w.add(knob);
       } else {
-        const steel = new THREE.MeshStandardMaterial({ color: 0xc8ccd4, roughness: 0.25, metalness: 0.9 });
-        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.12), gunWood);
+        const steel = stdMat({ color: 0xc8ccd4, roughness: 0.25, metalness: 0.9 });
+        const grip = new THREE.Mesh(geo(THREE.BoxGeometry,0.035, 0.035, 0.12), gunWood);
         grip.position.z = 0.06;
         w.add(grip);
-        const guard = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.02, 0.02), gunMetal);
+        const guard = new THREE.Mesh(geo(THREE.BoxGeometry,0.07, 0.02, 0.02), gunMetal);
         guard.position.z = 0.12;
         w.add(guard);
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.05, 0.24), steel);
+        const blade = new THREE.Mesh(geo(THREE.BoxGeometry,0.016, 0.05, 0.24), steel);
         blade.position.z = 0.25;
         blade.castShadow = true;
         w.add(blade);
-        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.07, 6), steel);
+        const tip = new THREE.Mesh(geo(THREE.ConeGeometry,0.025, 0.07, 6), steel);
         tip.rotation.x = Math.PI / 2;
         tip.position.z = 0.4;
         w.add(tip);
@@ -295,7 +316,7 @@ export class Duck {
     }
 
     const blob = new THREE.Mesh(
-      new THREE.CircleGeometry(0.5, 20),
+      geo(THREE.CircleGeometry,0.5, 20),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false }));
     blob.rotation.x = -Math.PI / 2;
     blob.position.y = 0.02;
@@ -304,25 +325,25 @@ export class Duck {
 
     this.gearMeshes = {};
     if (palette === 'player') {
-      const steel = new THREE.MeshStandardMaterial({ color: 0x6a6f76, roughness: 0.4, metalness: 0.8 });
-      const helm = new THREE.Mesh(new THREE.SphereGeometry(0.37, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), steel);
+      const steel = stdMat({ color: 0x6a6f76, roughness: 0.4, metalness: 0.8 });
+      const helm = new THREE.Mesh(geo(THREE.SphereGeometry,0.37, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), steel);
       helm.position.y = 0.08;
       helm.castShadow = true;
       helm.visible = false;
       this.head.add(helm);
       const vest = new THREE.Mesh(
-        new THREE.SphereGeometry(0.45, 20, 14, 0, Math.PI * 2, Math.PI * 0.28, Math.PI * 0.46),
-        new THREE.MeshStandardMaterial({ color: 0x6a7a5a, roughness: 0.6 }));
+        geo(THREE.SphereGeometry,0.45, 20, 14, 0, Math.PI * 2, Math.PI * 0.28, Math.PI * 0.46),
+        stdMat({ color: 0x6a7a5a, roughness: 0.6 }));
       vest.scale.set(1, 0.92, 1.12);
       vest.position.y = 0.42;
       vest.castShadow = true;
       vest.visible = false;
       this.root.add(vest);
-      const bootMat = new THREE.MeshStandardMaterial({ color: 0x7a4a26, roughness: 0.7 });
-      const gloveMat = new THREE.MeshStandardMaterial({ color: 0xb03028, roughness: 0.6 });
+      const bootMat = stdMat({ color: 0x7a4a26, roughness: 0.7 });
+      const gloveMat = stdMat({ color: 0xb03028, roughness: 0.6 });
       const shoes = [];
       for (const f of this.feet) {
-        const b = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.26), bootMat);
+        const b = new THREE.Mesh(geo(THREE.BoxGeometry,0.22, 0.14, 0.26), bootMat);
         b.position.set(0, 0.03, -0.02);
         b.castShadow = true;
         b.visible = false;
@@ -332,7 +353,7 @@ export class Duck {
       const gloves = [];
       this.wings.forEach((w, i) => {
         const side = i === 0 ? -1 : 1;
-        const gl = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), gloveMat);
+        const gl = new THREE.Mesh(geo(THREE.SphereGeometry,0.1, 10, 8), gloveMat);
         gl.position.set(side * 0.06, -0.18, 0.16);
         gl.visible = false;
         w.add(gl);
@@ -359,6 +380,12 @@ export class Duck {
   }
 
   die() { this.deathT = 0; }
+
+  // 几何体与常规材质为全局共享缓存，不随单只鸭子销毁；
+  // blob 阴影材质每只鸭独立（死亡动画单独调透明度），移除时释放。
+  dispose() {
+    if (this.blob) this.blob.material.dispose();
+  }
 
   update(dt, st = {}) {
     this.t += dt;

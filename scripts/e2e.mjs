@@ -190,7 +190,14 @@ try {
   check('换弹完成后进度条隐藏', !rl3.barVis && rl3.prog === 0 && rl3.mag === 24, JSON.stringify(rl3));
 
   // 鼠标居中/近中时朝屏幕前方瞄准（不向后、不大幅横摆）
-  await evaluate('(() => { const g = window.__game; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.mouse.x = innerWidth / 2; g.mouse.y = innerHeight / 2; return 1; })()');
+  // 先把相机落到「朝北(−z)」的收敛位姿：bot 战斗后相机朝向随机，低帧率下 lead 来不及摆正，
+  // 直接给定位姿保证「屏幕前方=世界−z」这一前提成立（与遮挡测试同一手法）
+  await evaluate(`(() => { const g = window.__game;
+    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
+    g.engine.camLook.set(0, 0.6, -2); g.engine.camPos.set(0, 11.2, 6.6);
+    g.engine.camera.position.copy(g.engine.camPos); g.engine.camera.lookAt(g.engine.camLook);
+    g.engine.camera.updateMatrixWorld();
+    g.mouse.x = innerWidth / 2; g.mouse.y = innerHeight / 2; return 1; })()`);
   await waitGame(1.2);
   const aimC = await evaluate('(() => { const g = window.__game; return { dz: +(g.aimPoint.z - g.p.pos.z).toFixed(2) }; })()');
   await evaluate('(() => { const g = window.__game; g.mouse.x = innerWidth * 0.52; g.mouse.y = innerHeight * 0.48; return 1; })()');
@@ -251,6 +258,115 @@ try {
     g.spreadNow = window.__origSpreadX; g.loadout.bulletSpeed = window.__origSpeedX;
     g.engine.updateCamera = window.__origCamX; g.bot = true; return 1; })()`);
 
+  // 准星只是方向：始终钉在鼠标指针处，不吸附到弹道落点；真实落点由地面琥珀环单独显示
+  const xhairPos = () => evaluate(`(() => { const g = window.__game;
+    const m = /translate\\(([-\\d.]+)px, ([-\\d.]+)px\\)/.exec(document.getElementById('crosshair').style.transform);
+    return { cx: +m[1], cy: +m[2], mx: g.mouse.x, my: g.mouse.y }; })()`);
+  await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
+    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
+    window.__waveX = { s: g.waveState, t: g.interT, q: g.spawnQueue };
+    g.enemies = []; g.spawnQueue = []; g.waveState = 'inter'; g.interT = 999;
+    window.__collidersX = g.world.colliders; g.world.colliders = [];
+    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
+    const v = g.aimPoint.clone().set(6, 0, 6).project(g.engine.camera);
+    g.mouse.x = (v.x * 0.5 + 0.5) * innerWidth; g.mouse.y = (-v.y * 0.5 + 0.5) * innerHeight;
+    return 1; })()`);
+  await waitGame(0.5);
+  const xg = await xhairPos();
+  const xgIy = await evaluate('+window.__game.impactPoint.y.toFixed(2)');
+  check('空地准星钉在鼠标指针处（只指示方向）', Math.hypot(xg.cx - xg.mx, xg.cy - xg.my) < 2 && xgIy < 0.1,
+    JSON.stringify({ ...xg, iy: xgIy }));
+  // 先把鼠标预置到目标地面点方向，等相机 lead 收敛（否则旧相机投影会随相机移动失效）
+  await evaluate(`(() => { const g = window.__game;
+    const v = g.aimPoint.clone().set(0.4, 0, -4.4).project(g.engine.camera);
+    g.mouse.x = (v.x * 0.5 + 0.5) * innerWidth; g.mouse.y = (-v.y * 0.5 + 0.5) * innerHeight;
+    return 1; })()`);
+  await waitGame(2.5);
+  await evaluate(`(() => { const g = window.__game;
+    g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
+    e.pos.set(0, 0, -4); e.duck.group.position.copy(e.pos);
+    e.speed = 0; e.vel.set(0, 0, 0); // 冻结敌人，防止等待期间追击玩家导致包围球脱靶
+    // 相机直接落到收敛位姿再冻结：bot 战斗后相机可能仍在 lerp 中途，
+    // 非收敛机位下固定鼠标射线会擦不到包围球。收敛位姿 = 玩家(0,0,0) + lead(0.4,-4.4)*0.4
+    const look = { x: 0.16, y: 0.6, z: -1.76 };
+    g.engine.camLook.set(look.x, look.y, look.z);
+    g.engine.camPos.set(look.x, look.y + 10.6, look.z + 8.6);
+    g.engine.camera.position.copy(g.engine.camPos);
+    g.engine.camera.lookAt(g.engine.camLook);
+    g.engine.camera.updateMatrixWorld();
+    // 冻结相机：相机 lead 跟随瞄准点，吸附会把相机拉向敌人→固定鼠标射线脱靶→吸附释放，
+    // 形成反馈震荡。测试期间固定机位保证射线稳定（与曳光截图同一手法）
+    window.__origCamOccl = g.engine.updateCamera.bind(g.engine);
+    g.engine.updateCamera = () => {};
+    // 瞄敌人侧后方地面 (0.4,-4.4)：射线擦边穿过包围球（球面命中点低于枪口上沿，
+    // 弹道步进也能命中敌人圆柱）。准星应留在鼠标处，落点环单独标在敌人身上
+    const v = g.aimPoint.clone().set(0.4, 0, -4.4).project(g.engine.camera);
+    g.mouse.x = (v.x * 0.5 + 0.5) * innerWidth; g.mouse.y = (-v.y * 0.5 + 0.5) * innerHeight;
+    return 1; })()`);
+  await waitGame(0.5);
+  const xo = await xhairPos();
+  // 新设计断言：准星钉在鼠标指针处（方向指示），弹道预测仍命中敌人。
+  // 落点环仅在落点与瞄准方向分离 >0.5m 时显示（此处命中同一敌人，环正确隐藏）
+  const xoSnap = await evaluate(`(() => { const g = window.__game; const e = g.enemies[g.enemies.length - 1];
+    const d = Math.hypot(g.aimPoint.x - e.pos.x, g.aimPoint.y - 0.75 * e.scale, g.aimPoint.z - e.pos.z);
+    return { sphereDist: +d.toFixed(2), r: +(0.8 * e.scale).toFixed(2), y: +g.aimPoint.y.toFixed(2),
+      impactD: +Math.hypot(g.impactPoint.x - e.pos.x, g.impactPoint.z - e.pos.z).toFixed(2) }; })()`);
+  check('遮挡时准星留在鼠标处（只指示方向）、弹道仍命中敌人',
+    Math.hypot(xo.cx - xo.mx, xo.cy - xo.my) < 2 && xoSnap.impactD < 1.2,
+    JSON.stringify({ ...xo, ...xoSnap }));
+  await shot('aim-impact');
+  await evaluate(`(() => { const g = window.__game;
+    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
+    g.enemies = [];
+    g.engine.updateCamera = window.__origCamOccl;
+    g.world.colliders = window.__collidersX;
+    g.waveState = window.__waveX.s; g.interT = window.__waveX.t; g.spawnQueue = window.__waveX.q;
+    g.bot = true; return 1; })()`);
+
+  // 射程限制：瞄准点超出射程时子弹在射程末端坠地，准星显示短落点，远处敌人不受伤害
+  await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
+    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
+    window.__waveR = { s: g.waveState, t: g.interT, q: g.spawnQueue };
+    g.enemies = []; g.spawnQueue = []; g.waveState = 'inter'; g.interT = 999;
+    window.__collidersR = g.world.colliders; g.world.colliders = [];
+    for (const b of g.bullets) if (b.vis) g.engine.scene.remove(b.vis);
+    g.bullets = [];
+    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
+    window.__rangeR = g.loadout.range; g.loadout.range = 6;
+    window.__spreadR = g.spreadNow; g.spreadNow = () => 0;
+    g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
+    e.pos.set(0, 0, -12); e.speed = 0; e.duck.group.position.copy(e.pos); window.__hpR = e.hp;
+    return 1; })()`);
+  await waitGame(0.6);
+  await evaluate(`(() => { const g = window.__game;
+    const v = g.aimPoint.clone().set(0, 0.75, -12).project(g.engine.camera);
+    g.mouse.x = (v.x * 0.5 + 0.5) * innerWidth; g.mouse.y = (-v.y * 0.5 + 0.5) * innerHeight;
+    return 1; })()`);
+  await waitGame(0.4);
+  const rngImp = await evaluate(`(() => { const g = window.__game;
+    return { d: +Math.hypot(g.impactPoint.x - g.p.pos.x, g.impactPoint.z - g.p.pos.z).toFixed(2), y: +g.impactPoint.y.toFixed(2) }; })()`);
+  check('瞄准超出射程时预测落点截断在射程内', rngImp.d > 5 && rngImp.d < 7.3 && rngImp.y < 0.1, JSON.stringify(rngImp));
+  const rngX = await xhairPos();
+  check('超射程时准星留在鼠标瞄准点（准星只是方向）', Math.hypot(rngX.cx - rngX.mx, rngX.cy - rngX.my) < 8, JSON.stringify(rngX));
+  const rngMark = await evaluate(`(() => { const g = window.__game;
+    return { vis: g.impactMarker ? g.impactMarker.visible : false,
+      d: g.impactMarker ? +Math.hypot(g.impactMarker.position.x - g.impactPoint.x, g.impactMarker.position.z - g.impactPoint.z).toFixed(2) : -1 }; })()`);
+  check('超射程时地面显示真实落点标记', rngMark.vis && rngMark.d < 0.3, JSON.stringify(rngMark));
+  const rngFire = await evaluate(`(async () => { const g = window.__game;
+    g.p.mag = 5; g.p.fireT = 0; g.fire();
+    const b = g.bullets[g.bullets.length - 1];
+    await new Promise(r => setTimeout(r, 600));
+    const e = g.enemies[g.enemies.length - 1];
+    return { gone: !g.bullets.includes(b), traveled: +b.traveled.toFixed(2), hp: e.hp, hp0: window.__hpR }; })()`);
+  check('子弹在射程末端坠地且未伤及射程外敌人', rngFire.gone && rngFire.traveled >= 5.5 && rngFire.traveled <= 6.6 && rngFire.hp === rngFire.hp0, JSON.stringify(rngFire));
+  await evaluate(`(() => { const g = window.__game;
+    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
+    g.enemies = [];
+    g.loadout.range = window.__rangeR; g.spreadNow = window.__spreadR;
+    g.world.colliders = window.__collidersR;
+    g.waveState = window.__waveR.s; g.interT = window.__waveR.t; g.spawnQueue = window.__waveR.q;
+    g.bot = true; return 1; })()`);
+
   // 拾取浮字：3 字标签（鸭锁骨）纹理不裁切，精灵按纹理宽高比缩放
   const clip = await evaluate(`(() => { const g = window.__game;
     g.fx.number(g.p.pos.clone(), '鸭锁骨', '#ffe28a');
@@ -283,10 +399,11 @@ try {
   const bulletMove = await evaluate(`(async () => { const g = window.__game;
     const b = g.bullets[g.bullets.length - 1];
     const p0 = b.vis.position.clone();
-    await new Promise(r => setTimeout(r, 250));
+    // 软件渲染可能低至 3fps（帧间隔 333ms），等待需覆盖至少 2 帧
+    await new Promise(r => setTimeout(r, 900));
     const d = +p0.distanceTo(b.vis.position).toFixed(2);
     b.life = 0.001;
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 700));
     return { d, removed: !g.bullets.includes(b), detached: b.vis.parent === null };
   })()`);
   check('弹体随帧移动且到期后移除', bulletMove.d > 1 && bulletMove.removed && bulletMove.detached, JSON.stringify(bulletMove));
@@ -641,8 +758,8 @@ try {
   await waitGame(0.3);
   const bs1 = await evaluate(`(() => { const g = window.__game; const b = g.enemies.find(e => e.type === 'boss');
     return { kind: b.skillKind, casting: b.skillT > 0, zone: g.fx.zones.some(z => z.life > 0 && z.g.visible),
-      toast: document.getElementById('toast').textContent, hp: g.p.hp, max: g.p.maxHp }; })()`);
-  check('Boss 蓄力全图技能并全图预警', bs1.kind === 'nova' && bs1.casting && bs1.zone && bs1.toast.includes('全图') && bs1.hp === bs1.max, JSON.stringify(bs1));
+      alert: document.getElementById('alertBanner').textContent, hp: g.p.hp, max: g.p.maxHp }; })()`);
+  check('Boss 蓄力全图技能并全图预警', bs1.kind === 'nova' && bs1.casting && bs1.zone && bs1.alert.includes('全图') && bs1.hp === bs1.max, JSON.stringify(bs1));
   await evaluate(`(() => { const g = window.__game;
     window.__origCamNova = g.engine.updateCamera.bind(g.engine);
     g.engine.updateCamera = () => { g.engine.camera.position.set(0, 26, 24); g.engine.camera.lookAt(0, 0, 0); };

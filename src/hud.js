@@ -59,7 +59,7 @@ export class HUD {
       waveBanner: $('waveBanner'), waveTitle: $('waveTitle'), waveTip: $('waveTip'),
       mag: $('mag'), reserve: $('reserve'), reloadHint: $('reloadHint'),
       reloadBar: $('reloadBar'), reloadFill: $('reloadFill'), weaponName: $('weaponName'), gunIcon: $('gunIcon'),
-      killfeed: $('killfeed'), toast: $('toast'),
+      killfeed: $('killfeed'), toast: $('toast'), alert: $('alertBanner'),
       crosshair: $('crosshair'), hitmarker: $('hitmarker'),
       dmg: $('dmgVignette'), low: $('lowVignette'), flash: $('flash'),
       start: $('startScreen'), pause: $('pauseScreen'), over: $('gameoverScreen'),
@@ -77,6 +77,7 @@ export class HUD {
     for (const sk of SKILLS) this.el.skillSlots[sk.id] = document.querySelector(`#skillBar .slot[data-skill="${sk.id}"]`);
     this._bannerT = null;
     this._toastT = null;
+    this._alertT = null;
     this._hitT = null;
     this._dmgT = null;
     this.cross = { x: innerWidth / 2, y: innerHeight / 2 };
@@ -103,7 +104,7 @@ export class HUD {
     const reloading = reloadT > 0;
     this.el.reloadBar.classList.toggle('on', reloading);
     this.el.reloadFill.style.width = reloading ? ((1 - reloadT / reloadTotal) * 100) + '%' : '0%';
-    this.el.reloadHint.textContent = reloading ? '换弹中…' : mag === 0 ? '按 R 换弹！' : '';
+    this.el.reloadHint.textContent = reloading ? '换弹中…' : mag === 0 ? (reserve > 0 ? '按 R 换弹！' : '弹药耗尽！拾取弹药箱') : '';
   }
 
   stats(wave, kills, score, time) {
@@ -169,10 +170,13 @@ export class HUD {
 
   talentOpen(on) {
     this.el.talent.classList.toggle('hidden', !on);
+    if (!on && document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   }
 
   renderTalents(game) {
     this.el.talentPoints.textContent = game.points;
+    const ae = document.activeElement;
+    const refocusId = ae && ae.closest && ae.closest('.tnode') ? ae.closest('.tnode').dataset.talent : null;
     const tree = this.el.talentTree;
     tree.textContent = '';
     for (const br of TALENT_BRANCHES) {
@@ -219,12 +223,21 @@ export class HUD {
       }
       tree.appendChild(col);
     }
+    if (refocusId) {
+      const btn = tree.querySelector(`.tnode[data-talent="${refocusId}"] button:not(:disabled)`)
+        || tree.querySelector(`.tnode[data-talent="${refocusId}"] button`);
+      if (btn) btn.focus();
+    }
   }
 
   shopOpen(on) {
     this.el.shop.classList.toggle('hidden', !on);
     if (on) this.shopTab('buy');
-    else this.hideTip();
+    else {
+      this.hideTip();
+      // 关闭时释放焦点，避免隐藏格子残留焦点被空格/回车误触
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    }
   }
 
   shopTab(tab) {
@@ -267,6 +280,7 @@ export class HUD {
     tile.addEventListener('blur', () => this.hideTip());
     tile.addEventListener('click', () => { if (action) action(); });
     tile.addEventListener('keydown', (e) => {
+      // preventDefault 阻止空格的原生 click 激活，避免「一次按键买两次」
       if ((e.key === 'Enter' || e.key === ' ') && action) { e.preventDefault(); action(); }
     });
   }
@@ -274,6 +288,11 @@ export class HUD {
   renderShop(game) {
     this.el.shopCoins.textContent = game.coins;
     this.hideTip();
+    // 记录当前聚焦格子，重渲染后恢复焦点（键盘/手柄连续购买不丢焦点）
+    const ae = document.activeElement;
+    const refocus = ae && ae.dataset
+      ? (ae.dataset.good ? `[data-good="${ae.dataset.good}"]` : ae.dataset.loot ? `[data-loot="${ae.dataset.loot}"]` : null)
+      : null;
     const grid = this.el.buyPane;
     grid.textContent = '';
     for (const good of shopCatalog()) {
@@ -364,6 +383,10 @@ export class HUD {
       this.bindTile(tile, tipData, () => game.sellItem(it.id, false));
       list.appendChild(tile);
     }
+    if (refocus) {
+      const el = this.el.shop.querySelector(refocus);
+      if (el) el.focus();
+    }
   }
 
   banner(wave, tip) {
@@ -393,6 +416,21 @@ export class HUD {
     this.el.toast.classList.add('show');
     clearTimeout(this._toastT);
     this._toastT = setTimeout(() => this.el.toast.classList.remove('show'), dur);
+  }
+
+  // 高优先级保命预警（Boss/精英技能）：独立通道，普通 toast 无法覆盖
+  alert(text, dur = 2500) {
+    this.el.alert.textContent = text;
+    this.el.alert.classList.add('show');
+    clearTimeout(this._alertT);
+    this._alertT = setTimeout(() => this.el.alert.classList.remove('show'), dur);
+  }
+
+  syncVolume(audio) {
+    const slider = $('volumeSlider'), pct = $('volumePct'), mute = $('muteBtn');
+    if (slider) slider.value = String(Math.round(audio.volume * 100));
+    if (pct) pct.textContent = Math.round(audio.volume * 100) + '%';
+    if (mute) mute.textContent = audio.muted ? '取消静音 (M)' : '静音 (M)';
   }
 
   hitmarker(kill) {
@@ -427,6 +465,10 @@ export class HUD {
     this.el.over.classList.toggle('hidden', name !== 'over');
     this.el.shop.classList.add('hidden');
     this.el.talent.classList.add('hidden');
+    // 切回战斗/标题时清掉覆盖层按钮焦点，防止空格原生激活隐藏按钮
+    if (name === null || name === 'start') {
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    }
   }
 
   results({ wave, kills, score, acc, time = 0, coins = 0, best = 0, isRecord = false }) {

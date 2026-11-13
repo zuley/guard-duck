@@ -23,6 +23,12 @@ export function groundHeight(x, z) {
   return h;
 }
 
+// 池塘水面高度：水面 mesh 在 y=-0.26，弹体落水即停，不再沉到池底
+export const WATER_Y = -0.26;
+export function waterSurfaceAt(x, z) {
+  return Math.hypot(x - POND.x, z - POND.z) < POND.r + 0.35 ? WATER_Y : null;
+}
+
 export function pathMask(x, z) {
   const inArena = smooth(21.5, 20, Math.hypot(x, z));
   const cross = Math.max(1 - smooth(1.6, 2.6, Math.abs(x)), 1 - smooth(1.6, 2.6, Math.abs(z)));

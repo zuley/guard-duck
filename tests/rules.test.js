@@ -31,6 +31,8 @@ import {
   eliteHpMul,
   ELITE_SKILL,
   BOSS_SKILL,
+  raySphereT,
+  marchImpact,
 } from '../src/rules.js';
 
 const MELEE_WEAPONS = ['fists', 'club', 'knife'];
@@ -595,5 +597,80 @@ describe('精英/Boss 技能数值', () => {
     expect(BOSS_SKILL.windup).toBeGreaterThanOrEqual(1.2);
     expect(BOSS_SKILL.cd).toBeGreaterThan(BOSS_SKILL.windup + 4);
     expect(BOSS_SKILL.dmgMul).toBeGreaterThan(1);
+  });
+});
+
+describe('准星落点预测', () => {
+  const flat = () => 0;
+  const open = () => false;
+  it('raySphereT 命中球面取近交点', () => {
+    const t = raySphereT(0, 0.75, 0, 0, 0, 1, 0, 0.75, 6, 0.8);
+    expect(t).toBeCloseTo(5.2, 5);
+  });
+  it('raySphereT 未命中或背向返回 -1', () => {
+    expect(raySphereT(0, 0.75, 0, 0, 0, 1, 0, 3, 6, 0.8)).toBe(-1);
+    expect(raySphereT(0, 0.75, 0, 0, 0, -1, 0, 0.75, 6, 0.8)).toBe(-1);
+  });
+  it('marchImpact 空地弹道落在地面瞄准点', () => {
+    const origin = { x: 0, y: 0.75, z: 0 };
+    const target = { x: 0, y: 0, z: 8 };
+    const d = Math.hypot(target.x - origin.x, target.y - origin.y, target.z - origin.z);
+    const dir = { x: 0, y: (target.y - origin.y) / d, z: (target.z - origin.z) / d };
+    const hit = marchImpact(origin, dir, 80, [], open, flat, 0.25);
+    expect(hit.hit).toBe('ground');
+    expect(hit.z).toBeGreaterThan(7.5);
+    expect(hit.z).toBeLessThan(8.3);
+    expect(hit.y).toBeLessThanOrEqual(0.04);
+  });
+  it('marchImpact 优先命中路径上的敌人而非更远地面', () => {
+    const origin = { x: 0, y: 0.75, z: 0 };
+    const dir = { x: 0, y: 0, z: 1 };
+    const targets = [{ x: 0, z: 5, radius: 0.72, height: 1.7 }];
+    const hit = marchImpact(origin, dir, 80, targets, open, flat, 0.25);
+    expect(hit.hit).toBe('enemy');
+    expect(hit.z).toBeGreaterThan(4.2);
+    expect(hit.z).toBeLessThan(5);
+  });
+  it('marchImpact 敌人高度之外的弹道越过其头顶', () => {
+    const origin = { x: 0, y: 2.2, z: 0 };
+    const dir = { x: 0, y: 0, z: 1 };
+    const targets = [{ x: 0, z: 5, radius: 0.72, height: 1.7 }];
+    const hit = marchImpact(origin, dir, 20, targets, open, flat, 0.25);
+    expect(hit.hit).not.toBe('enemy');
+  });
+  it('marchImpact 掩体先于敌人拦截弹道', () => {
+    const origin = { x: 0, y: 0.75, z: 0 };
+    const dir = { x: 0, y: 0, z: 1 };
+    const targets = [{ x: 0, z: 8, radius: 0.72, height: 1.7 }];
+    const blocked = (x, z) => z > 3.9 && z < 4.6;
+    const hit = marchImpact(origin, dir, 80, targets, blocked, flat, 0.25);
+    expect(hit.hit).toBe('wall');
+    expect(hit.z).toBeLessThan(4.7);
+  });
+  it('marchImpact 无命中时返回射程末端', () => {
+    const origin = { x: 0, y: 3, z: 0 };
+    const dir = { x: 0, y: 0, z: 1 };
+    const hit = marchImpact(origin, dir, 30, [], open, flat, 0.5);
+    expect(hit.hit).toBe('none');
+    expect(hit.z).toBeCloseTo(30, 5);
+  });
+});
+
+describe('枪支射程', () => {
+  it('每把枪都有正射程且各不相同', () => {
+    const ranges = Object.values(GUNS).map((g) => g.range);
+    for (const r of ranges) expect(r).toBeGreaterThan(0);
+    expect(new Set(ranges).size).toBe(ranges.length);
+    expect(GUNS.shotgun.range).toBeLessThan(GUNS.carbine.range);
+    expect(GUNS.carbine.range).toBeLessThan(GUNS.longrifle.range);
+  });
+
+  it('computeLoadout 暴露枪支射程', () => {
+    expect(computeLoadout('shotgun', {}).range).toBe(GUNS.shotgun.range);
+    expect(computeLoadout('longrifle', {}).range).toBe(GUNS.longrifle.range);
+  });
+
+  it('射程不短于伤害衰减末端（衰减区间内仍有伤害）', () => {
+    for (const g of Object.values(GUNS)) expect(g.range).toBeGreaterThanOrEqual(g.falloffEnd);
   });
 });

@@ -142,7 +142,8 @@ export function mulberry32(seed) {
 
 export function wavePlan(wave) {
   let counts = {
-    brawler: wave === 1 ? 6 : Math.max(2, 10 - wave * 2),
+    // 杂兵随波次平滑递减（每 2 波 -1），第 16 波起保底 2 只，避免早期公式骤降钳底
+    brawler: wave === 1 ? 6 : Math.max(2, 10 - Math.floor(wave / 2)),
     clubber: wave >= 2 ? Math.min(10, 2 + wave) : 0,
     knifer: wave >= 2 ? Math.min(10, wave) : 0,
     pistol: wave >= 3 ? Math.min(10, (wave - 2) * 2) : 0,
@@ -257,10 +258,10 @@ export function rollLoot(rng) {
 }
 
 export const GUNS = {
-  carbine: { label: '「谷仓」卡宾枪', price: 0, model: 'rifle', damage: 26, rpm: 540, magSize: 24, reloadTime: 1.6, bulletSpeed: 70, spreadBase: 0.012, pellets: 1, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55 },
-  repeater: { label: '「牧群」连发枪', price: 320, model: 'rifle', damage: 20, rpm: 780, magSize: 36, reloadTime: 1.7, bulletSpeed: 74, spreadBase: 0.016, pellets: 1, falloffStart: 16, falloffEnd: 30, falloffMin: 0.5 },
-  shotgun: { label: '「干草」霰弹枪', price: 400, model: 'shotgun', damage: 15, rpm: 150, magSize: 6, reloadTime: 2.0, bulletSpeed: 55, spreadBase: 0.035, pellets: 6, pelletSpread: 0.1, falloffStart: 9, falloffEnd: 18, falloffMin: 0.3 },
-  longrifle: { label: '「守夜」重步枪', price: 620, model: 'rifle', damage: 46, rpm: 300, magSize: 16, reloadTime: 1.9, bulletSpeed: 90, spreadBase: 0.006, pellets: 1, falloffStart: 30, falloffEnd: 55, falloffMin: 0.75 },
+  carbine: { label: '「谷仓」卡宾枪', price: 0, model: 'rifle', damage: 26, rpm: 540, magSize: 24, reloadTime: 1.6, bulletSpeed: 70, spreadBase: 0.012, pellets: 1, range: 34, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55 },
+  repeater: { label: '「牧群」连发枪', price: 320, model: 'rifle', damage: 20, rpm: 780, magSize: 36, reloadTime: 1.7, bulletSpeed: 74, spreadBase: 0.016, pellets: 1, range: 30, falloffStart: 16, falloffEnd: 30, falloffMin: 0.5 },
+  shotgun: { label: '「干草」霰弹枪', price: 400, model: 'shotgun', damage: 15, rpm: 150, magSize: 6, reloadTime: 2.0, bulletSpeed: 55, spreadBase: 0.035, pellets: 6, pelletSpread: 0.1, range: 18, falloffStart: 9, falloffEnd: 18, falloffMin: 0.3 },
+  longrifle: { label: '「守夜」重步枪', price: 620, model: 'rifle', damage: 46, rpm: 300, magSize: 16, reloadTime: 1.9, bulletSpeed: 90, spreadBase: 0.006, pellets: 1, range: 55, falloffStart: 30, falloffEnd: 55, falloffMin: 0.75 },
 };
 
 export const GEAR = {
@@ -320,6 +321,7 @@ export function computeLoadout(gunId, gear = {}) {
     magSize: g.magSize,
     reloadTime: g.reloadTime * [1, 0.7, 0.55, 0.4][gloves],
     bulletSpeed: g.bulletSpeed,
+    range: g.range,
     pellets: g.pellets,
     spreadMul: [1, 0.75, 0.6, 0.5][gloves],
     speedMul: [1, 1.15, 1.25, 1.35][shoes],
@@ -333,9 +335,9 @@ export function shopCatalog() {
     .filter(([, g]) => g.price > 0)
     .map(([id, g]) => ({
       id, kind: 'gun', label: g.label, price: g.price,
-      desc: `${g.damage} 伤害 · ${g.rpm} 射速 · ${g.magSize} 弹匣${g.pellets > 1 ? ` · ${g.pellets} 弹丸` : ''}`,
+      desc: `${g.damage} 伤害 · ${g.rpm} 射速 · ${g.magSize} 弹匣 · 射程 ${g.range}${g.pellets > 1 ? ` · ${g.pellets} 弹丸` : ''}`,
     }));
-  const ammo = [{ id: 'ammo', kind: 'ammo', label: '子弹箱', price: 60, desc: '备弹 +48' }];
+  const ammo = [{ id: 'ammo', kind: 'ammo', label: '子弹箱', price: 60, desc: '备弹 +48 · 全枪通用' }];
   const gear = Object.entries(GEAR).map(([id, g]) => ({ id, kind: 'gear', label: g.label, price: g.levels[0].price, desc: g.levels[0].desc }));
   return [...guns, ...ammo, ...gear];
 }
@@ -420,4 +422,30 @@ export function applyTalents(lo, ef) {
     rage: ef.rage,
     slow: ef.slow,
   };
+}
+/* ---------------- 准星落点预测 ---------------- */
+
+// 射线与球（敌人包围球）近交点距离；未命中或背向返回 -1
+export function raySphereT(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
+  const lx = ox - cx, ly = oy - cy, lz = oz - cz;
+  const b = lx * dx + ly * dy + lz * dz;
+  const c = lx * lx + ly * ly + lz * lz - r * r;
+  const disc = b * b - c;
+  if (disc <= 0) return -1;
+  const t = -b - Math.sqrt(disc);
+  return t > 0 ? t : -1;
+}
+
+// 沿单位方向步进模拟弹道，返回首个命中点（敌人 / 掩体 / 地面）或射程末端
+export function marchImpact(origin, dir, range, targets, isBlocked, groundAt, step = 0.5) {
+  let x = origin.x, y = origin.y, z = origin.z;
+  for (let d = 0; d < range; d += step) {
+    x += dir.x * step; y += dir.y * step; z += dir.z * step;
+    for (const t of targets) {
+      if (Math.hypot(x - t.x, z - t.z) < t.radius && y < t.height) return { x, y, z, hit: 'enemy' };
+    }
+    if (y < 1.8 && isBlocked(x, z)) return { x, y, z, hit: 'wall' };
+    if (y <= groundAt(x, z) + 0.04) return { x, y, z, hit: 'ground' };
+  }
+  return { x, y, z, hit: 'none' };
 }

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { sparkSprite, puffSprite, featherSprite, flashSprite, ringSprite, scorchSprite, textTexture } from './textures.js';
-import { groundHeight } from './world.js';
+import { groundHeight, waterSurfaceAt } from './world.js';
 
 const BILLBOARD_VERT = /* glsl */`
   attribute float aLife;
@@ -288,7 +288,8 @@ export class FX {
 
   decal(pos, size = 0.5) {
     const d = this.decals.find((x) => x.life <= 0) || this.decals[0];
-    d.m.position.set(pos.x, groundHeight(pos.x, pos.z) + 0.025, pos.z);
+    const wy = waterSurfaceAt(pos.x, pos.z);
+    d.m.position.set(pos.x, (wy !== null ? wy : groundHeight(pos.x, pos.z)) + 0.025, pos.z);
     d.m.rotation.z = Math.random() * 6;
     d.m.scale.setScalar(size);
     d.m.visible = true;
