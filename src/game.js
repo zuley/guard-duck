@@ -1,11 +1,19 @@
 import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
 import { FX } from './fx.js';
-import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, TALENTS, talentNext, talentEffects, SKILLS, applyTalents, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact } from './rules.js';
-import { ARENA, GATES, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
-import { glowSprite } from './textures.js';
+import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, TALENTS, talentNext, talentEffects, SKILLS, applyTalents, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
+import { ARENA, GATES, GATE_LANE_HALF, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
+import { glowSprite, textTexture } from './textures.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
+
+// 头顶名字精灵：贴图由 textTexture 内部统一缓存（32px 小栅格），此处不再自建缓存
+function makeNameSprite(text, color = '#ffffff', height = 0.3) {
+  const tex = textTexture(text, color, 32);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  s.scale.set(height * (tex.image.width / tex.image.height), height, 1);
+  return s;
+}
 
 function segBlocked(a, b, colliders) {
   const steps = 10;
@@ -58,7 +66,7 @@ export class Game {
     this.playerDuck = new Duck('player', 1);
     engine.scene.add(this.playerDuck.group);
     this.playerDuck.group.position.set(0, 0, 3);
-    this.playerHpBar = this.makeHpBar(0x7ee06a);
+    this.playerHpBar = this.makeHpBar(0x7ee06a, '鸭鸭', '#ffe9a8');
     this.playerHpBar.group.visible = false;
     const rbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x1a1208, transparent: true, opacity: 0.75, depthWrite: false }));
     rbg.scale.set(1.5, 0.09, 1);
@@ -127,7 +135,7 @@ export class Game {
 
   recomputeLoadout() {
     const oldMax = this.loadout ? this.loadout.maxHp : this.p.maxHp;
-    this.loadout = applyTalents(computeLoadout(this.gunId, this.gear), talentEffects(this.talents));
+    this.loadout = applyTalents(computeLoadout(this.gunId, this.gear), talentEffects(this.talents, this.level));
     const delta = this.loadout.maxHp - oldMax;
     this.p.maxHp = this.loadout.maxHp;
     this.p.hp = Math.min(this.p.maxHp, this.p.hp + Math.max(0, delta));
@@ -137,7 +145,7 @@ export class Game {
   clearField() {
     for (const e of this.enemies) {
       this.engine.scene.remove(e.duck.group); e.duck.dispose();
-      if (e.hpBar) this.engine.scene.remove(e.hpBar.group);
+      if (e.hpBar) this.removeHpBar(e.hpBar);
     }
     for (const pk of this.pickups) this.engine.scene.remove(pk.mesh);
     for (const b of this.bullets) if (b.vis) this.engine.scene.remove(b.vis);
@@ -289,6 +297,7 @@ export class Game {
 
   addXp(n) {
     this.xp += n; this.xpEarned += n;
+    const prevCount = skillCountForLevel(this.level);
     let leveled = false;
     while (this.xp >= xpForLevel(this.level)) {
       this.xp -= xpForLevel(this.level);
@@ -298,8 +307,16 @@ export class Game {
     }
     if (leveled) {
       const p = this.p;
+      const newCount = skillCountForLevel(this.level);
+      if (newCount > prevCount) this.recomputeLoadout(); // 仅在跨越技能解锁阈值时重算
       p.hp = Math.min(p.maxHp, p.hp + p.maxHp * 0.3);
-      this.hud.toast(`升级！Lv.${this.level} · 获得天赋点（T 键加点）`);
+      if (newCount > prevCount) {
+        const sk = SKILLS[newCount - 1]; // 解锁是严格前缀，新技能即第 newCount 个
+        const full = newCount === SKILLS.length;
+        this.hud.toast(`升级！Lv.${this.level} · 解锁技能「${sk.label}」按 ${sk.key} 释放${full ? ' · 四技能已满！' : ''}`);
+      } else {
+        this.hud.toast(`升级！Lv.${this.level} · 获得天赋点（T 键加点）`);
+      }
       this.fx.ring(p.pos.clone().setY(0.5), 0x7ee06a, 3);
       this.fx.number(p.pos.clone().setY(p.pos.y + 1.6), `Lv.${this.level}`, '#7ee06a');
       this.audio.levelUp();
@@ -336,14 +353,8 @@ export class Game {
     this.points -= next.cost;
     this.talents[id] = next.rank;
     this.recomputeLoadout();
-    if (t.skill) {
-      const sk = SKILLS.find((s) => s.id === t.skill);
-      this.hud.toast(`解锁主动技能「${sk.label}」· 按 ${sk.key} 释放`);
-      this.audio.levelUp();
-    } else {
-      this.hud.toast(`${t.name} 提升至 ${next.rank} 级`);
-      this.audio.pickup();
-    }
+    this.hud.toast(`${t.name} 提升至 ${next.rank} 级`);
+    this.audio.pickup();
     this.hud.renderTalents(this);
   }
 
@@ -351,7 +362,10 @@ export class Game {
     if (this.state !== 'playing') return;
     const sk = SKILLS.find((s) => s.key === n);
     if (!sk) return;
-    if (!this.loadout.skills[sk.id]) { this.hud.toast(`「${sk.label}」尚未解锁 · T 键点天赋`); return; }
+    if (!this.loadout.skills[sk.id]) {
+      this.hud.toast(`「${sk.label}」Lv.${sk.requiredLevel} 解锁 · 当前 Lv.${this.level}`);
+      return;
+    }
     if (this.skillCd[sk.id] > 0) { this.hud.toast(`「${sk.label}」冷却中 ${this.skillCd[sk.id].toFixed(1)}s`); return; }
     this.skillCd[sk.id] = sk.cd;
     const p = this.p;
@@ -784,17 +798,21 @@ export class Game {
     const t = ENEMY_TYPES[type];
     const gate = GATES[Math.floor(this.rng() * GATES.length)];
     const tangent = new THREE.Vector3(-gate.z, 0, gate.x).normalize();
-    const pos = new THREE.Vector3(gate.x, 0, gate.z).addScaledVector(tangent, (this.rng() - 0.5) * 5);
-    pos.y = groundHeight(pos.x, pos.z);
     const scale = t.scale * (elite ? ELITE.scale : 1);
+    const radius = t.radius * (elite ? ELITE.scale : 1);
+    // 生点横移上限从门口净空通道推导：半宽 - 敌人半径，任何体型（含精英重装）都不会落进沙袋碰撞体
+    const maxLat = Math.max(0, GATE_LANE_HALF - radius - 0.05);
+    const pos = new THREE.Vector3(gate.x, 0, gate.z).addScaledVector(tangent, (this.rng() * 2 - 1) * maxLat);
+    pos.y = groundHeight(pos.x, pos.z);
     const duck = new Duck(t.palette, scale, t.weapon, { boss: !!t.boss, elite });
     duck.group.position.copy(pos);
     this.engine.scene.add(duck.group);
     const hpScale = t.boss ? this.plan.bossScale : this.plan.hpScale * (elite ? eliteHpMul(this.wave) : 1);
     const e = {
       type, elite, duck, pos, vel: new THREE.Vector3(),
+      name: enemyName(type, this.rng),
       scale,
-      radius: t.radius * (elite ? ELITE.scale : 1),
+      radius,
       reach: (t.reach || 0) * (elite ? ELITE.reachMul : 1),
       damage: t.damage * (elite ? ELITE.dmgMul : 1),
       speed: t.speed * (elite ? ELITE.speedMul : 1),
@@ -804,11 +822,16 @@ export class Game {
       skillCd: 2.5 + this.rng() * 2, skillT: 0,
       seed: this.rng() * 10, dead: false,
     };
-    e.hpBar = this.makeHpBar(elite ? 0xffb030 : 0xff5346);
+    e.hpBar = this.makeHpBar(
+      t.boss ? 0xff3860 : elite ? 0xffb030 : 0xff5346,
+      (elite ? '精英·' : '') + e.name,
+      t.boss ? '#ff8a80' : elite ? '#ffcf70' : '#f5f0e6',
+      t.boss ? 1.6 : elite ? 1.25 : 1,
+    );
     this.enemies.push(e);
     this.fx.smoke(pos.clone().setY(pos.y + 0.3), 3, 0x6a5a4a, 0.5, 1.5, 0.7);
     this.warnGate(pos);
-    if (elite) this.hud.toast(`精英${t.label}来袭！三倍赏金`);
+    if (elite) this.hud.toast(`精英${e.name}来袭！三倍赏金`);
   }
 
   makeBulletVis(tailColor, tailLen) {
@@ -823,16 +846,29 @@ export class Game {
     return g;
   }
 
-  makeHpBar(color = 0xff5346) {
+  makeHpBar(color = 0xff5346, name = '', nameColor = '#ffffff', nameScale = 1) {
     const group = new THREE.Group();
     const bg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x1a1208, transparent: true, opacity: 0.75, depthWrite: false }));
     bg.scale.set(1.5, 0.16, 1);
     const fill = new THREE.Sprite(new THREE.SpriteMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false }));
     fill.scale.set(1.42, 0.1, 1);
     group.add(bg, fill);
+    if (name) {
+      const h = 0.55 * nameScale;
+      const label = makeNameSprite(name, nameColor, h);
+      label.position.y = 0.12 + h / 2;
+      label.renderOrder = 1; // 名字压在血条之上，不受贴图透明排序影响
+      group.add(label);
+    }
     group.visible = false;
     this.engine.scene.add(group);
     return { group, fill };
+  }
+
+  // 血条组随敌人销毁/清场调用：释放各自材质，名字贴图是共享缓存不销毁
+  removeHpBar(bar) {
+    this.engine.scene.remove(bar.group);
+    bar.group.traverse((o) => { if (o.material) o.material.dispose(); });
   }
 
   warnGate(pos) {
@@ -974,7 +1010,7 @@ export class Game {
           this.fx.zone(e.pos.clone(), sk.radius, e.skillKind === 'nova' ? 0xff4646 : 0xffa040, sk.windup);
           this.audio.skillCast();
           // 保命预警走独立高优先级通道，不被技能/拾取 toast 覆盖
-          this.hud.alert(e.skillKind === 'nova' ? '⚠ 鸭王蓄力全图冲击波！看准时机冲刺闪避' : '⚠ 精英蓄力战争践踏！快出圈', sk.windup * 1000 + 500);
+          this.hud.alert(e.skillKind === 'nova' ? `⚠ ${e.name}蓄力全图冲击波！看准时机冲刺闪避` : '⚠ 精英蓄力战争践踏！快出圈', sk.windup * 1000 + 500);
         }
       }
 
@@ -1065,7 +1101,7 @@ export class Game {
       if (e.dead && e.duck.deathT > 1.5) {
         this.engine.scene.remove(e.duck.group);
         e.duck.dispose();
-        if (e.hpBar) this.engine.scene.remove(e.hpBar.group);
+        if (e.hpBar) this.removeHpBar(e.hpBar);
         this.enemies.splice(i, 1);
       }
     }
@@ -1103,7 +1139,7 @@ export class Game {
     this.fx.smoke(e.pos.clone().setY(e.pos.y + 0.4), 3, 0x9a8a7a, 0.5, 1.6, 0.8);
     this.audio.kill();
     this.hud.hitmarker(true);
-    this.hud.feed([{ text: (e.elite ? '精英·' : '') + ENEMY_TYPES[e.type].label, em: true }, { text: ' 被击倒 ' }, { text: `+${sc}`, em: true }]);
+    this.hud.feed([{ text: (e.elite ? '精英·' : '') + e.name, em: true }, { text: ' 被击倒 ' }, { text: `+${sc}`, em: true }]);
     const c = coinsFor(e.type, e.elite);
     this.coins += c; this.coinsEarned += c;
     this.fx.number(e.pos.clone().setY(e.pos.y + 1.3), `+${c} 金币`, '#ffd95e');
@@ -1120,7 +1156,7 @@ export class Game {
       }
     }
     if (isBoss) {
-      this.hud.toast('鸭王被击败！缴获大量鸭杂');
+      this.hud.toast(`${e.name}被击败！缴获大量鸭杂`);
       this.audio.waveClear();
       this.fx.ring(e.pos.clone().setY(e.pos.y + 1), 0xffd24a, 4);
     }

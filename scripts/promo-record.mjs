@@ -100,8 +100,7 @@ const aimAt = (x, y, z) => evaluate(`(() => { const g = window.__game;
   return { x: (v.x + 1) / 2 * ${W}, y: (1 - v.y) / 2 * ${H} }; })()`).then((p) => mouse('mouseMoved', p.x, p.y));
 
 const clearField = () => evaluate(`(() => { const g = window.__game;
-  for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-  g.enemies = []; g.spawnQueue = [];
+  g.clearField(); g.spawnQueue = [];
   for (const b of g.ebullets) if (b.spr) g.engine.scene.remove(b.spr);
   g.ebullets = []; return 1; })()`);
 
@@ -154,8 +153,7 @@ try {
     window.__recMusic = (() => { const mr = new MediaRecorder(window.__musicDest.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 192000 });
       const rec = { mr, chunks: [] }; mr.ondataavailable = (e) => rec.chunks.push(e.data); mr.start(250); return rec; })();
     g.bot = false; g.keys.clear(); g.mouse.down = false;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = []; g.spawnQueue = [];
+    g.clearField(); g.spawnQueue = [];
     g.p.iframes = 999; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
     document.getElementById('hud').classList.remove('on');
     document.getElementById('crosshair').style.display = 'none';
@@ -225,12 +223,11 @@ try {
   await sleep(350); await key('KeyD', 68, false);
   await sleep(1300);
 
-  // ---- combatD: 鸭王 Boss 特写 + 击杀掉落 ----
+  // ---- combatD: 领导 Boss 特写 + 击杀掉落 ----
   await mark('combatD');
   stage = 'combatD';
   await evaluate(`(async () => { const g = window.__game; const { wavePlan } = await import('/src/rules.js');
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = []; g.spawnQueue = [];
+    g.clearField(); g.spawnQueue = [];
     for (const b of g.ebullets) if (b.spr) g.engine.scene.remove(b.spr);
     g.ebullets = [];
     g.wave = 5; g.plan = wavePlan(5); g.spawnEnemy('boss');
@@ -277,6 +274,8 @@ try {
   await mark('skills');
   stage = 'skills';
   await clearField();
+  // 技能按等级解锁（Lv.9 四技能齐）：展示前确保等级达标，否则 Digit4 只会录到锁定提示
+  await evaluate(`(() => { const g = window.__game; g.level = Math.max(g.level, 9); g.recomputeLoadout(); return 1; })()`);
   await evaluate(`(() => { const g = window.__game; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
     for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; const d = 2.3 + (i % 2) * 0.6;
       g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];

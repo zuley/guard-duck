@@ -33,6 +33,12 @@ import {
   BOSS_SKILL,
   raySphereT,
   marchImpact,
+  enemyName,
+  NAME_PREFIXES,
+  BOSS_NAMES,
+  skillsForLevel,
+  skillCountForLevel,
+  SKILL_EVERY_LEVELS,
 } from '../src/rules.js';
 
 const MELEE_WEAPONS = ['fists', 'club', 'knife'];
@@ -148,13 +154,15 @@ describe('敌人武器定义', () => {
 });
 
 describe('waveIntro 波次预告', () => {
-  it('前 5 波预告各自的新武器且互不相同', () => {
+  it('前 5 波预告各自的敌人且互不相同', () => {
     const intros = [1, 2, 3, 4, 5].map(waveIntro);
     expect(new Set(intros).size).toBe(5);
-    expect(intros[1]).toMatch(/棍|刀/);
-    expect(intros[2]).toMatch(/手枪/);
-    expect(intros[3]).toMatch(/步枪/);
-    expect(intros[4]).toMatch(/霰弹|重装/);
+    expect(intros[0]).toMatch(/需求鸭/);
+    expect(intros[1]).toMatch(/BUG鸭/);
+    expect(intros[1]).toMatch(/产品鸭/);
+    expect(intros[2]).toMatch(/前端鸭/);
+    expect(intros[3]).toMatch(/后端鸭/);
+    expect(intros[4]).toMatch(/设计鸭|领导/);
   });
   it('后续波次也有可用文案', () => {
     expect(waveIntro(9).length).toBeGreaterThan(0);
@@ -211,7 +219,7 @@ describe('精英强化单位', () => {
   it('精英不挤占 42 性能上限', () => {
     for (let w = 1; w <= 60; w++) expect(totalOf(wavePlan(w))).toBeLessThanOrEqual(42);
   });
-  it('精英体型介于重装与鸭王之间', () => {
+  it('精英体型介于设计鸭与领导 Boss 之间', () => {
     expect(ELITE.scale).toBeGreaterThan(ENEMY_TYPES.heavy.scale);
     expect(ELITE.scale).toBeLessThan(ENEMY_TYPES.boss.scale);
   });
@@ -427,7 +435,7 @@ describe('护具三阶升级', () => {
   });
 });
 
-describe('鸭王 Boss 波', () => {
+describe('领导 Boss 波', () => {
   it('Boss 属性：高血高分多弹丸大型', () => {
     const b = ENEMY_TYPES.boss;
     expect(b.boss).toBe(true);
@@ -454,9 +462,52 @@ describe('鸭王 Boss 波', () => {
     expect(wavePlan(60).bossScale).toBeLessThanOrEqual(6);
     expect(wavePlan(60).bossScale).toBeGreaterThan(4);
   });
-  it('Boss 波预告文案提及鸭王', () => {
-    expect(waveIntro(5)).toMatch(/鸭王/);
-    expect(waveIntro(10)).toMatch(/鸭王/);
+  it('Boss 波预告文案提及领导', () => {
+    expect(waveIntro(5)).toMatch(/领导/);
+    expect(waveIntro(10)).toMatch(/领导/);
+  });
+});
+
+describe('enemyName 打工人命名', () => {
+  it('任务 / 职位鸭以各自基础名结尾', () => {
+    const rng = mulberry32(7);
+    for (const [type, t] of Object.entries(ENEMY_TYPES)) {
+      if (t.kind === 'boss') continue;
+      for (let i = 0; i < 30; i++) expect(enemyName(type, rng).endsWith(t.label)).toBe(true);
+    }
+  });
+  it('前缀只取自对应词库，且确实会随机出现', () => {
+    const rng = mulberry32(42);
+    const seenPrefix = { task: new Set(), role: new Set() };
+    for (const [type, t] of Object.entries(ENEMY_TYPES)) {
+      if (t.kind === 'boss') continue;
+      for (let i = 0; i < 200; i++) {
+        const name = enemyName(type, rng);
+        const prefix = name.slice(0, name.length - t.label.length);
+        if (prefix) {
+          expect(NAME_PREFIXES[t.kind]).toContain(prefix);
+          seenPrefix[t.kind].add(prefix);
+        }
+      }
+    }
+    expect(seenPrefix.task.size).toBeGreaterThanOrEqual(3);
+    expect(seenPrefix.role.size).toBeGreaterThanOrEqual(3);
+  });
+  it('同种子名字序列可复现', () => {
+    const a = mulberry32(9), b = mulberry32(9);
+    for (const type of ['brawler', 'clubber', 'knifer', 'pistol', 'rifle', 'heavy', 'boss']) {
+      expect(enemyName(type, a)).toBe(enemyName(type, b));
+    }
+  });
+  it('Boss 名字是领导头衔且无前缀', () => {
+    const rng = mulberry32(3);
+    const seen = new Set();
+    for (let i = 0; i < 100; i++) {
+      const name = enemyName('boss', rng);
+      expect(BOSS_NAMES).toContain(name);
+      seen.add(name);
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -489,7 +540,7 @@ describe('天赋树结构', () => {
       expect(nodes.map((t) => t.tier).sort()).toEqual([1, 2, 3, 4]);
     }
   });
-  it('第 2 层解锁技能，前置为上一层至少 1 点', () => {
+  it('第 2 层为技能强化节点，前置为上一层至少 1 点', () => {
     const byId = Object.fromEntries(TALENTS.map((t) => [t.id, t]));
     for (const t of TALENTS) {
       if (t.tier === 1) expect(t.req).toBeNull();
@@ -518,14 +569,14 @@ describe('talentNext 加点规则', () => {
 });
 
 describe('talentEffects 数值叠加', () => {
-  it('空天赋为基准值且不解锁任何技能', () => {
+  it('空天赋为基准值，技能只随等级解锁（开局仅嘎嘎乱杀）', () => {
     const ef = talentEffects({});
     expect(ef.dmgBonus).toBe(1);
     expect(ef.maxHpBonus).toBe(0);
     expect(ef.speedBonus).toBe(1);
     expect(ef.killHeal).toBe(0);
     expect(ef.dashCdMul).toBe(1);
-    expect(Object.values(ef.skills).every((v) => !v)).toBe(true);
+    expect(ef.skills).toEqual({ storm: true, shield: false, rage: false, slow: false });
   });
   it('火力伤害每点 +8%', () => {
     expect(talentEffects({ t_dmg: 3 }).dmgBonus).toBeCloseTo(1.24);
@@ -540,21 +591,23 @@ describe('talentEffects 数值叠加', () => {
     expect(ef.speedBonus).toBeCloseTo(1.18);
     expect(ef.dashCdMul).toBeCloseTo(0.6);
   });
-  it('技能层数强化嘎嘎乱杀/抱头蹲防/嘎瓦鲁多', () => {
-    const ef = talentEffects({ t_storm: 1, t_storm2: 2, t_shield: 1, t_shield2: 2, t_slow: 1, t_slow2: 2 });
-    expect(ef.skills.storm).toBe(true);
-    expect(ef.storm.damage).toBe(110);
-    expect(ef.storm.radius).toBeCloseTo(6.1);
-    expect(ef.shield.pool).toBe(160);
-    expect(ef.shield.duration).toBe(10);
-    expect(ef.slow.duration).toBe(8);
-    expect(ef.slow.factor).toBeCloseTo(0.15);
+  it('强化节点提升技能数值（解锁与否只由等级决定）', () => {
+    const ef = talentEffects({ t_storm: 1, t_storm2: 2, t_shield: 1, t_shield2: 2, t_slow: 1, t_slow2: 2 }, 10);
+    expect(ef.storm.damage).toBe(125);
+    expect(ef.storm.radius).toBeCloseTo(6.6);
+    expect(ef.shield.pool).toBe(190);
+    expect(ef.shield.duration).toBe(11);
+    expect(ef.slow.duration).toBe(9);
+    expect(ef.slow.factor).toBeCloseTo(0.1);
   });
-  it('红温暴走提供固定射速与伤害倍率', () => {
-    const ef = talentEffects({ t_rage: 1 });
-    expect(ef.skills.rage).toBe(true);
-    expect(ef.rage.rpmMul).toBeGreaterThan(1);
-    expect(ef.rage.dmgMul).toBeGreaterThan(1);
+  it('红温强化提升持续与伤害，射速倍率固定', () => {
+    const base = talentEffects({}, 10);
+    expect(base.rage.duration).toBe(6);
+    expect(base.rage.dmgMul).toBeCloseTo(1.35);
+    const ef = talentEffects({ t_rage: 1 }, 10);
+    expect(ef.rage.duration).toBe(8);
+    expect(ef.rage.dmgMul).toBeCloseTo(1.45);
+    expect(ef.rage.rpmMul).toBeCloseTo(1.45);
   });
 });
 
@@ -563,6 +616,49 @@ describe('SKILLS 主动技能表', () => {
     expect(SKILLS.map((s) => s.id)).toEqual(['storm', 'shield', 'rage', 'slow']);
     expect(SKILLS.map((s) => s.key)).toEqual([1, 2, 3, 4]);
     for (const s of SKILLS) expect(s.cd).toBeGreaterThan(0);
+  });
+});
+
+describe('skillsForLevel 技能随等级解锁', () => {
+  it('开局 1 个技能（嘎嘎乱杀）', () => {
+    expect(skillsForLevel(1)).toEqual({ storm: true, shield: false, rage: false, slow: false });
+    expect(skillsForLevel(2)).toEqual({ storm: true, shield: false, rage: false, slow: false });
+  });
+  it('每 3 级解锁一个新技能，顺序固定', () => {
+    expect(SKILL_EVERY_LEVELS).toBe(3);
+    expect(skillsForLevel(3).shield).toBe(true);
+    expect(skillsForLevel(3).rage).toBe(false);
+    expect(skillsForLevel(6).rage).toBe(true);
+    expect(skillsForLevel(6).slow).toBe(false);
+    expect(skillsForLevel(9).slow).toBe(true);
+  });
+  it('Lv.9 起四技能全满，不再增加', () => {
+    for (const lv of [9, 10, 15, 30, 99]) {
+      expect(Object.values(skillsForLevel(lv)).every(Boolean)).toBe(true);
+    }
+  });
+  it('等级边界：2→3、5→6、8→9 各多一个', () => {
+    const count = (lv) => Object.values(skillsForLevel(lv)).filter(Boolean).length;
+    expect(count(2)).toBe(1); expect(count(3)).toBe(2);
+    expect(count(5)).toBe(2); expect(count(6)).toBe(3);
+    expect(count(8)).toBe(3); expect(count(9)).toBe(4);
+  });
+  it('低等级点技能天赋不会提前解锁技能', () => {
+    const ef = talentEffects({ t_storm: 1, t_shield: 1, t_rage: 1, t_slow: 1 }, 1);
+    expect(ef.skills).toEqual({ storm: true, shield: false, rage: false, slow: false });
+  });
+  it('requiredLevel 是唯一来源：与解锁判定一致（1/3/6/9）', () => {
+    expect(SKILLS.map((s) => s.requiredLevel)).toEqual([1, 3, 6, 9]);
+    for (const s of SKILLS) {
+      expect(skillsForLevel(s.requiredLevel)[s.id]).toBe(true);
+      if (s.requiredLevel > 1) expect(skillsForLevel(s.requiredLevel - 1)[s.id]).toBe(false);
+    }
+  });
+  it('skillCountForLevel 计数与解锁 map 一致', () => {
+    for (const lv of [1, 2, 3, 5, 6, 8, 9, 12]) {
+      const map = skillsForLevel(lv);
+      expect(Object.values(map).filter(Boolean).length).toBe(skillCountForLevel(lv));
+    }
   });
 });
 

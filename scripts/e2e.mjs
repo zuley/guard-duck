@@ -239,8 +239,7 @@ try {
 
   // 曳光穿准星定格截图：固定机位 + 零散布连射 + 慢弹速让曳光留在空中
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     for (const b of g.ebullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.ebullets = [];
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
@@ -263,9 +262,8 @@ try {
     const m = /translate\\(([-\\d.]+)px, ([-\\d.]+)px\\)/.exec(document.getElementById('crosshair').style.transform);
     return { cx: +m[1], cy: +m[2], mx: g.mouse.x, my: g.mouse.y }; })()`);
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    window.__waveX = { s: g.waveState, t: g.interT, q: g.spawnQueue };
-    g.enemies = []; g.spawnQueue = []; g.waveState = 'inter'; g.interT = 999;
+    window.__waveX = { s: g.waveState, t: g.interT, q: [...g.spawnQueue] };
+    g.clearField(); g.waveState = 'inter'; g.interT = 999;
     window.__collidersX = g.world.colliders; g.world.colliders = [];
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
     const v = g.aimPoint.clone().set(6, 0, 6).project(g.engine.camera);
@@ -316,8 +314,7 @@ try {
     JSON.stringify({ ...xo, ...xoSnap }));
   await shot('aim-impact');
   await evaluate(`(() => { const g = window.__game;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     g.engine.updateCamera = window.__origCamOccl;
     g.world.colliders = window.__collidersX;
     g.waveState = window.__waveX.s; g.interT = window.__waveX.t; g.spawnQueue = window.__waveX.q;
@@ -325,9 +322,8 @@ try {
 
   // 射程限制：瞄准点超出射程时子弹在射程末端坠地，准星显示短落点，远处敌人不受伤害
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    window.__waveR = { s: g.waveState, t: g.interT, q: g.spawnQueue };
-    g.enemies = []; g.spawnQueue = []; g.waveState = 'inter'; g.interT = 999;
+    window.__waveR = { s: g.waveState, t: g.interT, q: [...g.spawnQueue] };
+    g.clearField(); g.waveState = 'inter'; g.interT = 999;
     window.__collidersR = g.world.colliders; g.world.colliders = [];
     for (const b of g.bullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.bullets = [];
@@ -360,8 +356,7 @@ try {
     return { gone: !g.bullets.includes(b), traveled: +b.traveled.toFixed(2), hp: e.hp, hp0: window.__hpR }; })()`);
   check('子弹在射程末端坠地且未伤及射程外敌人', rngFire.gone && rngFire.traveled >= 5.5 && rngFire.traveled <= 6.6 && rngFire.hp === rngFire.hp0, JSON.stringify(rngFire));
   await evaluate(`(() => { const g = window.__game;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     g.loadout.range = window.__rangeR; g.spreadNow = window.__spreadR;
     g.world.colliders = window.__collidersR;
     g.waveState = window.__waveR.s; g.interT = window.__waveR.t; g.spawnQueue = window.__waveR.q;
@@ -556,8 +551,7 @@ try {
   // ===== 成长线：经验 / 等级 / 天赋 / 技能 =====
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     g.p.iframes = 60; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = []; g.spawnQueue = []; return 1; })()`);
+    g.clearField(); g.spawnQueue = []; return 1; })()`);
 
   const xp0 = await evaluate(`(() => { const g = window.__game; g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
     e.pos.set(2, 0, 2); e.hp = 1; const before = g.xpEarned; g.killEnemy(e); return { before, after: g.xpEarned }; })()`);
@@ -581,14 +575,14 @@ try {
   const dmg1 = await evaluate(`(() => { const g = window.__game; return { points: g.points, dmg: g.loadout.damage, rank: g.talents.t_dmg || 0 }; })()`);
   check('点选天赋嘴强王者伤害 +8%', dmg1.rank === 1 && dmg1.points === dmg0.points - 1 && Math.abs(dmg1.dmg - dmg0.dmg * 1.08) < 0.01, JSON.stringify({ dmg0, dmg1 }));
 
+  check('开局自带嘎嘎乱杀（等级解锁，无需天赋）', (await evaluate('window.__game.loadout.skills.storm')) === true);
   await clickSel('#talentTree .tnode[data-talent="t_storm"] button');
-  check('点选天赋解锁嘎嘎乱杀', (await evaluate('window.__game.loadout.skills.storm')) === true);
+  check('点选乱杀强化提升技能数值', (await evaluate('window.__game.loadout.storm.damage')) === 75);
   await tapT();
   check('T 键关闭天赋树恢复战斗', (await snap()).state === 'playing');
 
   const stormSetup = await evaluate(`(() => { const g = window.__game;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     for (let i = 0; i < 3; i++) { g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1]; e.pos.set(1.5 + i * 0.4, 0, 1.5); e.duck.group.position.copy(e.pos); e.hp = 30; }
     g.p.pos.set(0, 0, 0); g.p.iframes = 60; return { kills: g.kills }; })()`);
   await key('Digit1', 49, true); await sleep(120); await key('Digit1', 49, false); await sleep(300);
@@ -596,10 +590,15 @@ try {
   check('Digit1 释放嘎嘎乱杀进入冷却', stormAfter.cd > 10, `cd=${stormAfter.cd}`);
   check('嘎嘎乱杀击杀近身敌人', stormAfter.kills > stormSetup.kills, `kills ${stormSetup.kills}->${stormAfter.kills}`);
 
+  // 精确等级边界：addXp(3000) 已把等级推到 ~18，这里重置到阈值上下各测一次
+  const shieldGate = await evaluate(`(() => { const g = window.__game;
+    g.level = 2; g.recomputeLoadout(); const at2 = g.loadout.skills.shield;
+    g.level = 3; g.recomputeLoadout(); const at3 = g.loadout.skills.shield;
+    return { at2, at3 }; })()`);
+  check('抱头蹲防恰在 Lv.3 解锁（Lv.2 仍锁定）', shieldGate.at2 === false && shieldGate.at3 === true, JSON.stringify(shieldGate));
   await tapT();
   await clickSel('#talentTree .tnode[data-talent="t_hp"] button');
   await clickSel('#talentTree .tnode[data-talent="t_shield"] button');
-  check('点选天赋解锁抱头蹲防', (await evaluate('window.__game.loadout.skills.shield')) === true);
   await tapT();
   await key('Digit2', 50, true); await sleep(120); await key('Digit2', 50, false); await sleep(250);
   const shieldOn = await evaluate(`(() => { const g = window.__game; return { shield: g.p.shield, shieldT: +g.p.shieldT.toFixed(1), cd: +g.skillCd.shield.toFixed(1), bar: document.getElementById('shieldBar').classList.contains('on') }; })()`);
@@ -607,11 +606,23 @@ try {
   const absorb = await evaluate(`(() => { const g = window.__game; g.p.iframes = 0; const h = g.p.hp; g.damagePlayer(20); return { h: Math.round(h), after: Math.round(g.p.hp), shield: Math.round(g.p.shield) }; })()`);
   check('抱头蹲防吸收伤害不扣血', absorb.after === absorb.h && absorb.shield < shieldOn.shield, JSON.stringify(absorb));
 
+  // Lv.3 时红温暴走（Lv.6）仍未解锁：按键应提示且不进入冷却
   const rageLocked = await evaluate('window.__game.loadout.skills.rage');
   await key('Digit3', 51, true); await sleep(120); await key('Digit3', 51, false); await sleep(200);
   const rageLockedAfter = await evaluate(`(() => { const g = window.__game; return { cd: g.skillCd.rage, rageT: g.p.rageT }; })()`);
   check('未解锁技能按键不进入冷却', rageLocked === false && rageLockedAfter.cd === 0 && rageLockedAfter.rageT === 0, JSON.stringify(rageLockedAfter));
 
+  const rageGate = await evaluate(`(() => { const g = window.__game;
+    g.level = 5; g.recomputeLoadout(); const at5 = g.loadout.skills.rage;
+    g.level = 6; g.recomputeLoadout(); const at6 = g.loadout.skills.rage;
+    return { at5, at6 }; })()`);
+  check('红温暴走恰在 Lv.6 解锁（Lv.5 仍锁定）', rageGate.at5 === false && rageGate.at6 === true, JSON.stringify(rageGate));
+
+  const slowGate = await evaluate(`(() => { const g = window.__game;
+    g.level = 8; g.recomputeLoadout(); const at8 = g.loadout.skills.slow;
+    g.level = 9; g.recomputeLoadout(); const at9 = g.loadout.skills.slow;
+    return { at8, at9 }; })()`);
+  check('嘎瓦鲁多恰在 Lv.9 解锁（Lv.8 仍锁定）', slowGate.at8 === false && slowGate.at9 === true, JSON.stringify(slowGate));
   await tapT();
   await clickSel('#talentTree .tnode[data-talent="t_speed"] button');
   await clickSel('#talentTree .tnode[data-talent="t_slow"] button');
@@ -627,8 +638,8 @@ try {
   await key('Digit3', 51, true); await sleep(120); await key('Digit3', 51, false); await sleep(250);
   const rageOn = await evaluate(`(() => { const g = window.__game; return { rageT: +g.p.rageT.toFixed(1), cd: +g.skillCd.rage.toFixed(1) }; })()`);
   check('Digit3 释放红温暴走', rageOn.rageT > 5 && rageOn.cd > 18, JSON.stringify(rageOn));
-  const rageDmg = await evaluate(`(() => { const g = window.__game; g.p.mag = 24; g.p.fireT = 0; g.aimPoint.set(0, 0.7, 5); g.fire(); const b = g.bullets[g.bullets.length - 1]; return { dmg: +b.dmg.toFixed(2), expect: +(g.loadout.damage * 1.35).toFixed(2) }; })()`);
-  check('红温暴走提升子弹伤害 35%', Math.abs(rageDmg.dmg - rageDmg.expect) < 0.02, JSON.stringify(rageDmg));
+  const rageDmg = await evaluate(`(() => { const g = window.__game; g.p.mag = 24; g.p.fireT = 0; g.aimPoint.set(0, 0.7, 5); g.fire(); const b = g.bullets[g.bullets.length - 1]; return { dmg: +b.dmg.toFixed(2), expect: +(g.loadout.damage * g.loadout.rage.dmgMul).toFixed(2) }; })()`);
+  check('红温暴走按倍率提升子弹伤害', Math.abs(rageDmg.dmg - rageDmg.expect) < 0.02, JSON.stringify(rageDmg));
   const skillDom = await evaluate(`(() => [...document.querySelectorAll('#skillBar .slot')].map(s => ({ skill: s.dataset.skill, locked: s.classList.contains('locked'), active: s.classList.contains('active') })))()`);
   check('技能栏四格全部解锁且红温暴走高亮', skillDom.every(s => !s.locked) && skillDom.find(s => s.skill === 'rage').active, JSON.stringify(skillDom));
   await shot('skill');
@@ -636,8 +647,7 @@ try {
   // 霰弹枪弹丸计数 + 低弹药兜底 + 场外威胁预警
   const sgBefore = await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     g.p.mag = 6; g.p.reserve = 0; g.p.iframes = 60; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = []; g.spawnQueue = [];
+    g.clearField(); g.spawnQueue = [];
     for (let i = 0; i < 3; i++) g.spawnEnemy('brawler');
     return { shots: g.shots, hits: g.hits, kills: g.kills, threats: document.querySelectorAll('.threat').length }; })()`);
   check('场外出生触发威胁预警', sgBefore.threats > 0, `threats=${sgBefore.threats}`);
@@ -653,8 +663,7 @@ try {
 
   // Boss 生成 / 血量成长 / 血条 / 皇冠
   const bossInfo = await evaluate(`(async () => { const g = window.__game; const { wavePlan } = await import('/src/rules.js');
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     g.wave = 5; g.plan = wavePlan(5); g.spawnEnemy('boss');
     const b = g.enemies.find(e => e.type === 'boss');
     b.pos.set(4, 0, 4); b.duck.group.position.copy(b.pos);
@@ -717,8 +726,7 @@ try {
   // 精英大范围技能：预警圈 + 圈内伤害（空旷站位；暂清碰撞体，避免木箱把冲锋路径挤到圈边）
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     window.__colsBackup = g.world.colliders; g.world.colliders = [];
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     for (const b of g.ebullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.ebullets = [];
     g.spawnEnemy({ type: 'brawler', elite: true });
@@ -745,8 +753,7 @@ try {
   // Boss 全图技能：远距离仍命中 + 冲刺无敌帧可闪避
   await evaluate(`(() => { const g = window.__game;
     g.world.colliders = window.__colsBackup;
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     for (const b of g.ebullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.ebullets = [];
     g.spawnEnemy('boss');
@@ -789,8 +796,7 @@ try {
 
   // 护具 + 霰弹枪上身特写
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.mouse.down = false; g.keys.clear();
-    for (const e of g.enemies) { g.engine.scene.remove(e.duck.group); if (e.hpBar) g.engine.scene.remove(e.hpBar.group); }
-    g.enemies = [];
+    g.clearField();
     for (const b of g.ebullets) if (b.spr) g.engine.scene.remove(b.spr);
     g.ebullets = [];
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;

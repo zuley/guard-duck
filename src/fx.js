@@ -316,9 +316,8 @@ export class FX {
 
   number(pos, text, color = '#ffe28a') {
     const n = this.numbers.find((x) => x.life <= 0) || this.numbers[0];
-    const key = text + color;
-    if (!this.numTex.has(key)) this.numTex.set(key, textTexture(text, color));
-    const tex = this.numTex.get(key);
+    const tex = textTexture(text, color); // 贴图由 textures.js 统一缓存
+    this.numTex.set(text + color, tex); // 兼容索引（e2e 用），与共享缓存指向同一贴图
     n.s.material.map = tex;
     n.s.material.needsUpdate = true;
     n.s.position.copy(pos).add(new THREE.Vector3((Math.random() - 0.5) * 0.4, 1.3, 0));

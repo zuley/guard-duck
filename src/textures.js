@@ -387,18 +387,22 @@ export function ringSprite() {
   }));
 }
 
-export function textTexture(text, color = '#ffe28a') {
-  const font = '900 64px "Yuanti SC","YouYuan","Microsoft YaHei",sans-serif';
-  const c = document.createElement('canvas');
-  const ctx = c.getContext('2d');
-  ctx.font = font;
-  const w = Math.max(128, Math.ceil(ctx.measureText(text).width) + 24);
-  c.width = w; c.height = 128;
-  ctx.font = font;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.lineWidth = 10; ctx.strokeStyle = 'rgba(20,12,4,0.9)';
-  ctx.strokeText(text, w / 2, 64);
-  ctx.fillStyle = color;
-  ctx.fillText(text, w / 2, 64);
-  return toTexture(c, { repeat: false });
+// 文字贴图统一在此缓存（text|color|size 为键）：伤害飘字用 64px，头顶名字用 32px。
+// 名字精灵屏幕投影仅 ~23-47px，32px 栅格观感相同、显存约为 1/4。
+export function textTexture(text, color = '#ffe28a', size = 64) {
+  return cached(`text:${text}|${color}|${size}`, () => {
+    const font = `900 ${size}px "Yuanti SC","YouYuan","Microsoft YaHei",sans-serif`;
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    ctx.font = font;
+    const w = Math.max(size * 2, Math.ceil(ctx.measureText(text).width) + size * 0.375);
+    c.width = w; c.height = size * 2;
+    ctx.font = font;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = size * 0.156; ctx.strokeStyle = 'rgba(20,12,4,0.9)';
+    ctx.strokeText(text, w / 2, size);
+    ctx.fillStyle = color;
+    ctx.fillText(text, w / 2, size);
+    return toTexture(c, { repeat: false });
+  });
 }

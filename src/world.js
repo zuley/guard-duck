@@ -8,6 +8,12 @@ export const POND = { x: -13, z: -13, r: 6.6 };
 export const GATES = [
   { x: 0, z: -26 }, { x: 0, z: 26 }, { x: -26, z: 0 }, { x: 26, z: 0 },
 ];
+// 门口沙袋布局常数：两垛分列入口两侧，中间留净空通道。
+// GATE_LANE_HALF 是通道净空半宽（collider 内缘），由沙袋首袋偏移与半径推导，
+// spawnEnemy 用它限制生点横移，保证任何敌人（含精英重装）直线进场不碰沙袋。
+const BAG_INNER_OFFSET = 3.25;
+const BAG_RADIUS = 0.55;
+export const GATE_LANE_HALF = BAG_INNER_OFFSET - BAG_RADIUS; // 2.7
 
 const smooth = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -346,21 +352,26 @@ export class World {
       hayGeos.push(c);
       this.colliders.push({ x, z, r: 0.85 });
     }
+    // 沙袋拆成左右两垛分列入口两侧（原本横在路中间会卡住进场的鸭子），
+    // 中间留净空通道（collider 内缘 ±GATE_LANE_HALF），与栅栏门口同宽；
+    // 生点横移由 spawnEnemy 按 GATE_LANE_HALF - 敌人半径 动态限制，不再靠手同步常数
     for (const g of GATES) {
       const inward = new THREE.Vector3(-g.x, 0, -g.z).normalize();
       const side = new THREE.Vector3(-inward.z, 0, inward.x);
-      for (let row = 0; row < 2; row++) {
-        for (let i = -2; i <= 2; i++) {
-          if (row === 1 && Math.abs(i) === 2) continue;
-          const p = new THREE.Vector3(g.x, 0, g.z)
-            .addScaledVector(inward, 3.2 + row * 0.55)
-            .addScaledVector(side, i * 0.72 + (row ? 0.36 : 0));
-          const s = new THREE.SphereGeometry(0.34, 8, 6);
-          s.scale(1.25, 0.6, 0.85);
-          s.rotateY(Math.atan2(side.x, side.z) + (rng() - 0.5) * 0.3);
-          s.translate(p.x, 0.2 + row * 0.36, p.z);
-          bagGeos.push(s);
-          if (row === 0) this.colliders.push({ x: p.x, z: p.z, r: 0.55 });
+      for (const dir of [-1, 1]) {
+        for (let row = 0; row < 2; row++) {
+          const n = row === 0 ? 3 : 2;
+          for (let k = 0; k < n; k++) {
+            const p = new THREE.Vector3(g.x, 0, g.z)
+              .addScaledVector(inward, 3.2 + row * 0.55)
+              .addScaledVector(side, dir * (BAG_INNER_OFFSET + k * 0.72) + (row ? dir * 0.36 : 0));
+            const s = new THREE.SphereGeometry(0.34, 8, 6);
+            s.scale(1.25, 0.6, 0.85);
+            s.rotateY(Math.atan2(side.x, side.z) + (rng() - 0.5) * 0.3);
+            s.translate(p.x, 0.2 + row * 0.36, p.z);
+            bagGeos.push(s);
+            if (row === 0) this.colliders.push({ x: p.x, z: p.z, r: BAG_RADIUS });
+          }
         }
       }
     }

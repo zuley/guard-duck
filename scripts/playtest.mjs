@@ -196,7 +196,7 @@ try {
   // ---------- V5 Boss 预警独立通道不被技能 toast 覆盖 ----------
   await ensurePlaying();
   const bossFound = await ev(`(() => { const g = window.__game;
-    g.talents = { t_hp: 1, t_shield: 1 }; g.recomputeLoadout();
+    g.talents = { t_hp: 1 }; g.level = Math.max(g.level, 3); g.recomputeLoadout();
     g.nextWave(); g.spawnQueue = [];
     g.spawnEnemy('boss');
     return g.enemies.some(e => e.type === 'boss' && !e.dead); })()`);
@@ -204,7 +204,7 @@ try {
     await ev(`(() => { const b = window.__game.enemies.find(e => e.type === 'boss'); b.skillCd = 0; })()`);
     let warnSeen = false;
     for (let i = 0; i < 30; i++) {
-      warnSeen = await ev(`document.getElementById('alertBanner').textContent.includes('鸭王')`);
+      warnSeen = await ev(`document.getElementById('alertBanner').textContent.includes('全图冲击波')`);
       if (warnSeen) break;
       await sleep(100);
     }
@@ -215,7 +215,7 @@ try {
       alertShown: document.getElementById('alertBanner').classList.contains('show'),
       bossWindup: window.__game.enemies.find(e => e.type === 'boss')?.skillT > 0 }))()`);
     check('V5', 'Boss 预警走独立通道，技能提示无法覆盖',
-      warnSeen && v5.bossWindup && v5.alertShown && v5.alert.includes('鸭王') && v5.toast.includes('蹲防'),
+      warnSeen && v5.bossWindup && v5.alertShown && v5.alert.includes('全图冲击波') && v5.toast.includes('蹲防'),
       `toast="${v5.toast}"，alert="${v5.alert}"（独立显示=${v5.alertShown}）`);
     await shot('v5-boss-alert');
   } else check('V5', 'Boss 预警独立通道', false, 'Boss 未出生');

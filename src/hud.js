@@ -74,7 +74,12 @@ export class HUD {
       talent: $('talentScreen'), talentPoints: $('talentPoints'), talentTree: $('talentTree'),
     };
     this.el.skillSlots = {};
-    for (const sk of SKILLS) this.el.skillSlots[sk.id] = document.querySelector(`#skillBar .slot[data-skill="${sk.id}"]`);
+    this._skillRefs = {};
+    for (const sk of SKILLS) {
+      const slot = document.querySelector(`#skillBar .slot[data-skill="${sk.id}"]`);
+      this.el.skillSlots[sk.id] = slot;
+      if (slot) this._skillRefs[sk.id] = { cd: slot.querySelector('.cd'), cdText: slot.querySelector('.cdText'), lastText: null };
+    }
     this._bannerT = null;
     this._toastT = null;
     this._alertT = null;
@@ -153,11 +158,15 @@ export class HUD {
   skills(unlocked, cds, active) {
     for (const sk of SKILLS) {
       const slot = this.el.skillSlots[sk.id];
-      if (!slot) continue;
-      slot.classList.toggle('locked', !unlocked[sk.id]);
+      const ref = this._skillRefs[sk.id];
+      if (!slot || !ref) continue;
+      const locked = !unlocked[sk.id];
+      slot.classList.toggle('locked', locked);
       const cd = cds[sk.id] || 0;
-      slot.querySelector('.cd').style.transform = `scaleY(${Math.min(1, cd / sk.cd)})`;
-      slot.querySelector('.cdText').textContent = cd > 0 ? Math.ceil(cd) : '';
+      ref.cd.style.transform = `scaleY(${Math.min(1, cd / sk.cd)})`;
+      // 未解锁显示解锁等级（唯一来源 requiredLevel），冷却中显示倒计时；仅在变化时写 DOM
+      const text = locked ? `Lv${sk.requiredLevel}` : cd > 0 ? String(Math.ceil(cd)) : '';
+      if (text !== ref.lastText) { ref.cdText.textContent = text; ref.lastText = text; }
       slot.classList.toggle('active', (active[sk.id] || 0) > 0);
     }
   }

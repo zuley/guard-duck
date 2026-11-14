@@ -16,7 +16,8 @@ export const WEAPON = {
 
 export const ENEMY_TYPES = {
   brawler: {
-    label: '空手灰鸭',
+    label: '需求鸭',
+    kind: 'task',
     palette: 'grunt',
     weapon: 'fists',
     hp: 40,
@@ -30,7 +31,8 @@ export const ENEMY_TYPES = {
     scale: 1,
   },
   clubber: {
-    label: '棍棒灰鸭',
+    label: 'BUG鸭',
+    kind: 'task',
     palette: 'grunt',
     weapon: 'club',
     hp: 60,
@@ -44,7 +46,8 @@ export const ENEMY_TYPES = {
     scale: 1.05,
   },
   knifer: {
-    label: '小刀绿鸭',
+    label: '产品鸭',
+    kind: 'role',
     palette: 'runner',
     weapon: 'knife',
     hp: 38,
@@ -58,7 +61,8 @@ export const ENEMY_TYPES = {
     scale: 0.88,
   },
   pistol: {
-    label: '手枪灰鸭',
+    label: '前端鸭',
+    kind: 'role',
     palette: 'grunt',
     weapon: 'pistol',
     hp: 55,
@@ -72,7 +76,8 @@ export const ENEMY_TYPES = {
     scale: 1,
   },
   rifle: {
-    label: '步枪灰鸭',
+    label: '后端鸭',
+    kind: 'role',
     palette: 'grunt',
     weapon: 'rifle',
     hp: 70,
@@ -86,7 +91,8 @@ export const ENEMY_TYPES = {
     scale: 1,
   },
   heavy: {
-    label: '霰弹重装胖鸭',
+    label: '设计鸭',
+    kind: 'role',
     palette: 'tank',
     weapon: 'shotgun',
     hp: 220,
@@ -102,7 +108,8 @@ export const ENEMY_TYPES = {
     scale: 1.35,
   },
   boss: {
-    label: '鸭王「暴君」',
+    label: 'Leader鸭',
+    kind: 'boss',
     palette: 'tank',
     weapon: 'shotgun',
     hp: 600,
@@ -121,6 +128,22 @@ export const ENEMY_TYPES = {
 };
 
 export const ELITE = { scale: 1.45, dmgMul: 1.5, scoreMul: 3, reachMul: 1.25, speedMul: 0.9 };
+
+// 打工人主题命名：任务 / 职位鸭随机带前缀，Boss 是各路领导
+export const NAME_PREFIXES = {
+  task: ['紧急', '加急', '临时', '生产', '线上', '遗留', '高优', '突发', '跨部门', '反复修改的'],
+  role: ['愤怒的', '开心的', '实习的', '开除的', '加班的', '摸鱼的', '甩锅的', '背锅的', '秃头的', '提离职的', '卷王的', '划水的'],
+};
+export const BOSS_NAMES = ['产品Leader', '前端Leader', '后端Leader', '设计Leader', '测试主管', '研发主管', '项目经理', '产品经理', '技术总监', '部门经理'];
+
+// 约六成概率带前缀；Boss 固定无前缀；rng 传入保证可复现
+export function enemyName(type, rng = Math.random) {
+  const t = ENEMY_TYPES[type];
+  if (t.kind === 'boss') return BOSS_NAMES[Math.floor(rng() * BOSS_NAMES.length)];
+  const pool = NAME_PREFIXES[t.kind] || [];
+  const prefix = pool.length && rng() < 0.6 ? pool[Math.floor(rng() * pool.length)] : '';
+  return prefix + t.label;
+}
 
 export const ELITE_SKILL = { radius: 4.5, windup: 0.9, cd: 7, dmgMul: 1.6, range: 8 };
 export const BOSS_SKILL = { radius: 40, windup: 1.6, cd: 9, dmgMul: 2.2 };
@@ -180,13 +203,13 @@ export function wavePlan(wave) {
 
 export function waveIntro(wave) {
   if (wave >= 5 && wave % 5 === 0) {
-    return wave === 5 ? '霰弹重装压阵，鸭王亲自出马！' : '鸭王驾到！集中火力，击败它赢取重赏！';
+    return wave === 5 ? '设计鸭扛着霰弹枪压阵，领导亲自出马！' : '领导驾到！集中火力，击败它赢取重赏！';
   }
   switch (wave) {
-    case 1: return '空手鸭群扑来，先热热身！';
-    case 2: return '棍棒与小刀登场，小心近身挥击！';
-    case 3: return '手枪出现，利用干草垛掩体！';
-    case 4: return '步枪火力压制，别在开阔地停留！';
+    case 1: return '需求鸭空手扑来，先热热身！';
+    case 2: return 'BUG鸭抡棍棒、产品鸭持小刀，小心近身挥击！';
+    case 3: return '前端鸭掏出手枪，利用干草垛掩体！';
+    case 4: return '后端鸭步枪火力压制，别在开阔地停留！';
     default: return '敌群来袭，精英带队，守住农场！';
   }
 }
@@ -361,15 +384,15 @@ export const TALENT_BRANCHES = [
 
 export const TALENTS = [
   { id: 't_dmg', branch: 'fire', tier: 1, label: '嘴强王者', name: '嘴强王者', max: 3, req: null, desc: (r) => `子弹伤害 +${8 * (r + 1)}%` },
-  { id: 't_storm', branch: 'fire', tier: 2, label: '嘎嘎乱杀', name: '嘎嘎乱杀', max: 1, req: 't_dmg', skill: 'storm', desc: () => '解锁主动技能「嘎嘎乱杀」(键1)' },
+  { id: 't_storm', branch: 'fire', tier: 2, label: '乱杀强化', name: '乱杀强化', max: 1, req: 't_dmg', skill: 'storm', desc: () => '「嘎嘎乱杀」伤害 +15 · 半径 +0.5' },
   { id: 't_storm2', branch: 'fire', tier: 3, label: '杀疯了', name: '杀疯了', max: 2, req: 't_storm', desc: (r) => `乱杀伤害 +${25 * (r + 1)} · 半径 +${(0.8 * (r + 1)).toFixed(1)}` },
-  { id: 't_rage', branch: 'fire', tier: 4, label: '红温暴走', name: '红温暴走', max: 1, req: 't_storm2', skill: 'rage', desc: () => '解锁主动技能「红温暴走」(键3)' },
+  { id: 't_rage', branch: 'fire', tier: 4, label: '红温强化', name: '红温强化', max: 1, req: 't_storm2', skill: 'rage', desc: () => '「红温暴走」持续 +2s · 伤害再 +10%' },
   { id: 't_hp', branch: 'guard', tier: 1, label: '贴秋膘', name: '贴秋膘', max: 3, req: null, desc: (r) => `生命上限 +${20 * (r + 1)}` },
-  { id: 't_shield', branch: 'guard', tier: 2, label: '抱头蹲防', name: '抱头蹲防', max: 1, req: 't_hp', skill: 'shield', desc: () => '解锁主动技能「抱头蹲防」(键2)' },
+  { id: 't_shield', branch: 'guard', tier: 2, label: '蹲防强化', name: '蹲防强化', max: 1, req: 't_hp', skill: 'shield', desc: () => '「抱头蹲防」护盾 +30 · 持续 +1s' },
   { id: 't_shield2', branch: 'guard', tier: 3, label: '加厚羽绒', name: '加厚羽绒', max: 2, req: 't_shield', desc: (r) => `蹲防护盾 +${40 * (r + 1)} · 持续 +${2 * (r + 1)}s` },
   { id: 't_regen', branch: 'guard', tier: 4, label: '吃鸭补鸭', name: '吃鸭补鸭', max: 2, req: 't_shield2', desc: (r) => `每次击杀回复 ${4 * (r + 1)} 生命` },
   { id: 't_speed', branch: 'swift', tier: 1, label: '冲鸭', name: '冲鸭', max: 3, req: null, desc: (r) => `移动速度 +${6 * (r + 1)}%` },
-  { id: 't_slow', branch: 'swift', tier: 2, label: '嘎瓦鲁多', name: '嘎瓦鲁多', max: 1, req: 't_speed', skill: 'slow', desc: () => '解锁主动技能「嘎瓦鲁多」(键4)' },
+  { id: 't_slow', branch: 'swift', tier: 2, label: '时停强化', name: '时停强化', max: 1, req: 't_speed', skill: 'slow', desc: () => '「嘎瓦鲁多」持续 +1s · 敌人更慢' },
   { id: 't_slow2', branch: 'swift', tier: 3, label: '时停续杯', name: '时停续杯', max: 2, req: 't_slow', desc: (r) => `减速持续 +${1.5 * (r + 1)}s · 敌人更慢` },
   { id: 't_dash', branch: 'swift', tier: 4, label: '溜了溜了', name: '溜了溜了', max: 2, req: 't_slow2', desc: (r) => `冲刺冷却 -${20 * (r + 1)}%` },
 ];
@@ -380,7 +403,7 @@ export function talentNext(id, ranks = 0) {
   return { rank: ranks + 1, cost: 1 };
 }
 
-export function talentEffects(ranks = {}) {
+export function talentEffects(ranks = {}, level = 1) {
   const r = (id) => ranks[id] || 0;
   return {
     dmgBonus: 1 + 0.08 * r('t_dmg'),
@@ -388,16 +411,12 @@ export function talentEffects(ranks = {}) {
     speedBonus: 1 + 0.06 * r('t_speed'),
     killHeal: 4 * r('t_regen'),
     dashCdMul: 1 - 0.2 * r('t_dash'),
-    skills: {
-      storm: r('t_storm') > 0,
-      shield: r('t_shield') > 0,
-      rage: r('t_rage') > 0,
-      slow: r('t_slow') > 0,
-    },
-    storm: { damage: 60 + 25 * r('t_storm2'), radius: 4.5 + 0.8 * r('t_storm2'), knock: 6 },
-    shield: { pool: 80 + 40 * r('t_shield2'), duration: 6 + 2 * r('t_shield2') },
-    rage: { duration: 6, rpmMul: 1.45, dmgMul: 1.35 },
-    slow: { duration: 5 + 1.5 * r('t_slow2'), factor: 0.35 - 0.1 * r('t_slow2') },
+    // 技能解锁只看等级（开局1个，每3级+1）；天赋树只强化技能数值
+    skills: skillsForLevel(level),
+    storm: { damage: 60 + 15 * r('t_storm') + 25 * r('t_storm2'), radius: 4.5 + 0.5 * r('t_storm') + 0.8 * r('t_storm2'), knock: 6 },
+    shield: { pool: 80 + 30 * r('t_shield') + 40 * r('t_shield2'), duration: 6 + 1 * r('t_shield') + 2 * r('t_shield2') },
+    rage: { duration: 6 + 2 * r('t_rage'), rpmMul: 1.45, dmgMul: 1.35 + 0.1 * r('t_rage') },
+    slow: { duration: 5 + 1 * r('t_slow') + 1.5 * r('t_slow2'), factor: 0.35 - 0.05 * r('t_slow') - 0.1 * r('t_slow2') },
   };
 }
 
@@ -407,6 +426,18 @@ export const SKILLS = [
   { id: 'rage', key: 3, label: '红温暴走', icon: '温', cd: 20 },
   { id: 'slow', key: 4, label: '嘎瓦鲁多', icon: '停', cd: 22 },
 ];
+
+// 技能随等级解锁：开局 1 个（嘎嘎乱杀），之后每 3 级 +1，Lv.9 四技能齐。
+// requiredLevel 是唯一来源：解锁判定、HUD 锁定标签、未解锁提示都从它推导。
+export const SKILL_EVERY_LEVELS = 3;
+for (let i = 0; i < SKILLS.length; i++) SKILLS[i].requiredLevel = i === 0 ? 1 : i * SKILL_EVERY_LEVELS;
+export function skillCountForLevel(level) {
+  return Math.min(SKILLS.length, 1 + Math.floor(Math.max(1, level) / SKILL_EVERY_LEVELS));
+}
+export function skillsForLevel(level) {
+  const n = skillCountForLevel(level);
+  return Object.fromEntries(SKILLS.map((s, i) => [s.id, i < n]));
+}
 
 export function applyTalents(lo, ef) {
   return {
