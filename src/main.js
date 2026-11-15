@@ -68,12 +68,20 @@ document.getElementById('cardBookClose').addEventListener('click', () => {
 
 window.addEventListener('keydown', (e) => {
   // 一次按下只触发一次动作；关面板/选卡后长按的空格、数字键不能变成冲刺或技能。
-  if (e.repeat && /^(Space|Enter|Escape|Key[PBTEQM]|Digit[1-4]|F3)$/.test(e.code)) {
+  if (e.repeat && /^(Space|Enter|Escape|Key[PBTM]|Digit[1-4]|F3)$/.test(e.code)) {
     e.preventDefault(); return;
   }
-  const inMenu = ['weapons', 'cardbook', 'paused', 'card'].includes(game.state);
+  // 跳过结算延迟只负责显示，不能让同一次 Enter/Space 顺便激活重开。
+  if (game.state === 'over' && game.overTimer) {
+    clearTimeout(game.overTimer); game.overTimer = null;
+    hud.screen('over');
+    e.preventDefault();
+    return;
+  }
+  const inMenu = ['weapons', 'cardbook', 'paused', 'card', 'over'].includes(game.state);
+  const onNativeControl = !!document.activeElement?.matches('button, summary, a[href], input');
   const onSlider = document.activeElement?.type === 'range';
-  if ((e.code.startsWith('Arrow') && !(inMenu && onSlider)) || (e.code === 'Space' && (!inMenu || game.state === 'card')) || (e.code === 'Tab' && game.state === 'playing')) e.preventDefault();
+  if ((e.code.startsWith('Arrow') && !(inMenu && onSlider)) || (e.code === 'Space' && (game.state === 'playing' || game.state === 'card' || (!inMenu && !onNativeControl))) || (e.code === 'Tab' && game.state === 'playing')) e.preventDefault();
   if (inMenu && e.code === 'Tab') {
     e.preventDefault();
     const list = game.menuFocusables();
@@ -108,14 +116,16 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); (cards[i] || cards[0])?.click(); return; }
     return;
   }
-  // 死亡结算延迟期内任意键跳过等待，直接出结算。
+  // 已显示的结算页保留按钮原生 Enter/Space；方向键只移动焦点，不重新显示/抢焦点。
   if (game.state === 'over') {
-    if (game.overTimer) { clearTimeout(game.overTimer); game.overTimer = null; }
-    hud.screen('over');
+    if (e.code.startsWith('Arrow')) {
+      game.menuNavigate(e.code === 'ArrowRight' ? 1 : e.code === 'ArrowLeft' ? -1 : 0,
+        e.code === 'ArrowDown' ? 1 : e.code === 'ArrowUp' ? -1 : 0);
+    }
     return;
   }
   if (game.state === 'title') {
-    if (e.code === 'Enter') { e.preventDefault(); audio.init(); audio.uiClick(); game.start(); }
+    if (e.code === 'Enter' && !onNativeControl) { e.preventDefault(); audio.init(); audio.uiClick(); game.start(); }
     return;
   }
   if (e.code === 'KeyM') {
@@ -138,14 +148,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyB') { game.openWeapons(); return; }
   if (e.code === 'KeyT') { game.openCardBook(); return; }
   if (/^Digit[1-4]$/.test(e.code)) { game.castSkill(+e.code.slice(5)); return; }
-  if (e.code === 'KeyQ') { game.cycleGun(-1); return; }
-  if (e.code === 'KeyE') { game.cycleGun(1); return; }
   if (e.code === 'F3') { e.preventDefault(); game.showFps = !game.showFps; return; }
-  if (game.state === 'playing') game.keys.add(e.code);
+  // 仅记录战斗移动 / 冲刺；订阅只能在 B 面板内显式付费确认。
+  if (game.state === 'playing' && /^(Key[WASD]|Arrow(Up|Down|Left|Right)|Space)$/.test(e.code)) game.keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => game.keys.delete(e.code));
 window.addEventListener('mousemove', (e) => { game.mouse.x = e.clientX; game.mouse.y = e.clientY; });
-window.addEventListener('wheel', (e) => { if (game.state === 'playing') game.cycleGun(e.deltaY > 0 ? 1 : -1); }, { passive: true });
 window.addEventListener('mousedown', (e) => {
   if (e.button === 0 && game.state === 'playing') { game.mouseFire = true; game.mouse.down = true; }
 });

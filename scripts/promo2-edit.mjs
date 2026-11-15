@@ -2,17 +2,24 @@
 // 动画章节卡、合成音效(whoosh/sub-drop/riser)、颗粒+暗角。用法：node scripts/promo2-edit.mjs
 import { spawnSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, readFileSync, renameSync, existsSync, copyFileSync } from 'node:fs';
+import { REFERENCE_DATE } from '../src/subscriptions.js';
 
 const FF = process.env.LOCALAPPDATA + '/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-9.0.2-full_build/bin/ffmpeg.exe';
 const DIR = 'shots/.promo2-edit';
 const ROOT = process.cwd().replace(/\\/g, '/');
+const MECHANICS = 'subscriptions-tokens-v1';
+const LOCAL_NOTICE = '宣传摆拍 · 纯本地游戏 · 订阅 / Token / 封号 / 保护道具均为虚构 · 无真实 API / 账号 / 支付 / 资料采集';
+const M = JSON.parse(readFileSync('shots/.promo2-markers.json', 'utf8'));
+const recordedCards = JSON.parse(readFileSync('shots/.promo2-cards.json', 'utf8'));
+const mk = M.markers;
+if ([M, recordedCards].some(data => data.mechanics !== MECHANICS || data.referenceDate !== REFERENCE_DATE)
+  || !['initialPlan', 'plans', 'benefits', 'protections', 'over'].every(name => Number.isFinite(mk?.[name]))) {
+  throw new Error('Subscription footage and captions required; manually re-record with the updated promo2-record.mjs before editing.');
+}
+const CARDS = recordedCards.frames;
 mkdirSync(DIR, { recursive: true });
 copyFileSync('C:/Windows/Fonts/msyh.ttc', `${DIR}/msyh.ttc`);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const M = JSON.parse(readFileSync('shots/.promo2-markers.json', 'utf8'));
-const CARDS = JSON.parse(readFileSync('shots/.promo2-cards.json', 'utf8'));
-const mk = M.markers;
+writeFileSync(`${DIR}/local-notice.txt`, LOCAL_NOTICE);
 
 function run(args, tag) {
   const r = spawnSync(FF, args, { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 });
@@ -38,6 +45,7 @@ const card = (name, c, o = {}) => B.push(Object.assign({ name, kind: 'card', c, 
 
 frames('cold', mk.bossKill + 0.05, mk.bossKill + 0.85, { speed: 0.3, zoom: 1.12, lb: 1, audio: 'music', trans: 0.35, ttype: 'fadeblack' });
 card('title', 'c0', { trans: 0.3 });
+frames('initialPlan', mk.initialPlan + 0.1, mk.beauty1 - 0.1, { trans: 0.3 });
 frames('beauty1', mk.beauty1 + 0.3, mk.beauty1 + 3.5, { audio: 'music', trans: 0.4 });
 frames('beauty2', mk.beauty2 + 0.3, mk.beauty2 + 3.1, { audio: 'music', trans: 0.3 });
 frames('mont1', mk.cast1 + 0.5, mk.cast1 + 1.2, { zoom: 1.15, audio: 'music', trans: 0 });
@@ -68,8 +76,9 @@ frames('skill4', mk.cast4 - 0.15, mk.cast4 + 2.6, { flash: 1, trans: 0.3 });
 card('card3', 'c3');
 frames('talents', mk.talents + 0.2, mk.skills - 0.3, { speed: 2 });
 card('card4', 'c4');
-frames('weapons', mk.shop + 0.8, mk.benefits - 0.3, { speed: 2, trans: 0 });
-frames('benefits', mk.benefits + 0.2, mk.over - 0.3, { speed: 2, trans: 0.4 });
+frames('plans', mk.plans + 0.8, mk.benefits - 0.3, { speed: 1.4, trans: 0 });
+frames('benefits', mk.benefits + 0.2, mk.protections - 0.3, { speed: 2, trans: 0.25 });
+frames('protections', mk.protections + 0.2, mk.over - 0.3, { speed: 1.5, trans: 0.4 });
 frames('over', mk.over + 0.8, mk.over + 4.8, { trans: 0.4 });
 card('end', 'c5', { trans: 0 });
 
@@ -106,6 +115,8 @@ for (let i = 0; i < B.length; i++) {
   if (b.lb) vf.push('drawbox=x=0:y=0:w=iw:h=132:color=black:t=fill', 'drawbox=x=0:y=ih-132:w=iw:h=132:color=black:t=fill');
   if (b.flash) vf.push('fade=t=in:st=0:d=0.1:color=white');
   if (b.badge) vf.push(`drawtext=fontfile=${DIR}/msyh.ttc:text=×4:fontsize=60:fontcolor=white@0.9:box=1:boxcolor=black@0.45:boxborderw=16:x=w-tw-56:y=150`);
+  if (b.kind === 'frames') vf.push('drawbox=x=0:y=ih-46:w=iw:h=46:color=black@0.7:t=fill',
+    `drawtext=fontfile=${DIR}/msyh.ttc:textfile=${DIR}/local-notice.txt:fontsize=22:fontcolor=white:x=(w-tw)/2:y=h-34`);
   vf.push(`tpad=stop_mode=clone:stop_duration=${dur.toFixed(4)}`, `trim=duration=${dur.toFixed(4)}`, 'setpts=PTS-STARTPTS');
   vf.push('setsar=1', 'format=yuv420p');
 

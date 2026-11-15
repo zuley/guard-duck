@@ -1,17 +1,17 @@
+import { PLANS, getPlan } from './subscriptions.js';
+
+// 实体弹道的通用基准；Token 才是玩家调用资源，不再维护弹匣或备弹。
 export const WEAPON = {
-  name: 'Claude 步枪',
-  magSize: 24,
-  reserveStart: 96,
-  rpm: 540,
-  reloadTime: 1.6,
-  damage: 26,
-  bulletSpeed: 70,
+  name: 'DS 调用器',
+  rpm: PLANS.ds.rpm,
+  damage: PLANS.ds.damage,
+  bulletSpeed: PLANS.ds.bulletSpeed,
   spreadBase: 0.012,
   spreadMove: 0.02,
   spreadHeat: 0.03,
-  falloffStart: 18,
-  falloffEnd: 34,
-  falloffMin: 0.55,
+  falloffStart: PLANS.ds.falloffStart,
+  falloffEnd: PLANS.ds.falloffEnd,
+  falloffMin: PLANS.ds.falloffMin,
 };
 
 export const ENEMY_TYPES = {
@@ -237,13 +237,12 @@ export function scoreFor(type, wave, elite = false) {
   return Math.round(t.score * (1 + (wave - 1) * 0.1) * (elite ? ELITE.scoreMul : 1));
 }
 
-export function rollDrop(rng, type, ammoLow = false, elite = false) {
-  if (ammoLow) return 'ammo';
-  if (elite) return rng() < 0.55 ? 'ammo' : 'health';
+export function rollDrop(rng, type, elite = false) {
+  // 保留原回血分支的概率；原弹药分支变为空掉落，而非增加回血频率。
+  if (elite) return rng() < 0.55 ? null : 'health';
   const chance = type === 'heavy' || type === 'boss' ? 0.6 : type === 'knifer' || type === 'brawler' ? 0.25 : 0.3;
-  const r = rng();
-  if (r >= chance) return null;
-  return rng() < 0.55 ? 'ammo' : 'health';
+  if (rng() >= chance) return null;
+  return rng() < 0.55 ? null : 'health';
 }
 
 // 打工人战利品：拾取即结算金币 + 一个即时效果（effect 字段供 game.js 派发）。
@@ -253,7 +252,7 @@ export const LOOT_ITEMS = [
   { id: 'welfare', label: '节日福利', coins: 10, weight: 12, color: 0xff7ab8, effect: { kind: 'shield', amount: 20, cap: 120 }, desc: '+10 金币 · 护盾 +20（上限 120）' },
   { id: 'salary', label: '本月工资', coins: 14, weight: 11, color: 0x7ee06a, effect: { kind: 'heal', amount: 25 }, desc: '+14 金币 · 回血 25' },
   { id: 'coffee', label: '下午茶', coins: 8, weight: 12, color: 0xc89060, effect: { kind: 'haste', duration: 5 }, desc: '+8 金币 · 移速 +25% 5s' },
-  { id: 'overtime', label: '加班费', coins: 18, weight: 9, color: 0x9fe8ff, effect: { kind: 'ammo', amount: 16 }, desc: '+18 金币 · 备弹 +16' },
+  { id: 'overtime', label: '加班费', coins: 18, weight: 9, color: 0x9fe8ff, effect: { kind: 'xp', amount: 12 }, desc: '+18 金币 · 经验 +12' },
   { id: 'performance', label: '季度绩效', coins: 24, weight: 7, color: 0x6fd6ff, effect: { kind: 'xp', amount: 30 }, desc: '+24 金币 · 经验 +30' },
   { id: 'bonus', label: '项目奖金', coins: 32, weight: 5, color: 0xffd95e, effect: { kind: 'rage', duration: 4 }, desc: '+32 金币 · 红温 4s' },
   { id: 'yearbonus', label: '年终奖', coins: 60, weight: 2, color: 0xffc63a, effect: { kind: 'heal', amount: 60 }, desc: '+60 金币 · 回血 60' },
@@ -280,34 +279,18 @@ export function rollLoot(rng) {
   return out;
 }
 
-// AI 模型主题武器：初始 Claude 免费，其余用金币在武器面板购买。
-// accent 用于图标 / 曳光配色，tag 是风味标语。
-export const GUNS = {
-  claude: { label: 'Claude 步枪', tag: '深思熟虑 · 稳定输出', accent: 0xd97757, price: 0, model: 'rifle', damage: 26, rpm: 540, magSize: 24, reloadTime: 1.6, bulletSpeed: 70, spreadBase: 0.012, pellets: 1, range: 34, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55 },
-  qwen: { label: 'Qwen 连发枪', tag: '千问千答 · 火力压制', accent: 0x615ced, price: 320, model: 'rifle', damage: 20, rpm: 780, magSize: 36, reloadTime: 1.7, bulletSpeed: 74, spreadBase: 0.016, pellets: 1, range: 30, falloffStart: 16, falloffEnd: 30, falloffMin: 0.5 },
-  glm: { label: 'GLM 霰弹枪', tag: '智谱清言 · 近距爆发', accent: 0x3b82f6, price: 400, model: 'shotgun', damage: 15, rpm: 150, magSize: 6, reloadTime: 2.0, bulletSpeed: 55, spreadBase: 0.035, pellets: 6, pelletSpread: 0.1, range: 18, falloffStart: 9, falloffEnd: 18, falloffMin: 0.3 },
-  codex: { label: 'Codex 重步枪', tag: '代码生成 · 远程狙杀', accent: 0x10a37f, price: 620, model: 'rifle', damage: 46, rpm: 300, magSize: 16, reloadTime: 1.9, bulletSpeed: 90, spreadBase: 0.006, pellets: 1, range: 55, falloffStart: 30, falloffEnd: 55, falloffMin: 0.75 },
-};
-
-// 武器面板目录：只卖枪，无护具、无弹药、无出售。
-export function gunCatalog() {
-  return Object.entries(GUNS).map(([id, g]) => ({
-    id, label: g.label, tag: g.tag, price: g.price, accent: g.accent,
-    desc: `${g.damage} 伤害 · ${g.rpm} 射速 · ${g.magSize} 弹匣 · 射程 ${g.range}${g.pellets > 1 ? ` · ${g.pellets} 弹丸` : ''}`,
-  }));
-}
-
-export function computeLoadout(gunId) {
-  const g = GUNS[gunId] || GUNS.claude;
+// 订阅配置是价格、参考元数据和基础战斗属性的唯一来源。
+// 未订阅时只用 DS 生成标题/预览外观，fire() 仍要求有效的已付费订阅。
+export function computeLoadout(planId) {
+  const g = getPlan(planId) || PLANS.ds;
   return {
     gun: g,
     damage: g.damage,
     rpm: g.rpm,
-    magSize: g.magSize,
-    reloadTime: g.reloadTime,
     bulletSpeed: g.bulletSpeed,
     range: g.range,
     pellets: g.pellets,
+    intrinsicPierce: g.intrinsicPierce,
     spreadMul: 1,
     speedMul: 1,
     dmgMul: 1,
@@ -343,8 +326,8 @@ export const CARDS = [
   { id: 'c_dmg', rarity: 'common', name: '尖嘴利喙', icon: '喙', max: 5, tag: '火力', desc: (n) => `子弹伤害 +${12 * n}%` },
   { id: 'c_hp', rarity: 'common', name: '贴秋膘', icon: '膘', max: 5, tag: '生存', desc: (n) => `生命上限 +${25 * n}` },
   { id: 'c_speed', rarity: 'common', name: '冲鸭', icon: '冲', max: 4, tag: '机动', desc: (n) => `移动速度 +${8 * n}%` },
-  { id: 'c_reload', rarity: 'common', name: '快手换弹', icon: '换', max: 3, tag: '火力', desc: (n) => `换弹速度 +${[0, 18, 33, 45][n]}%` },
-  { id: 'c_mag', rarity: 'common', name: '加长弹匣', icon: '匣', max: 3, tag: '火力', desc: (n) => `弹匣容量 +${25 * n}%` },
+  { id: 'c_reload', rarity: 'common', name: 'Token 优化', icon: '优', max: 3, tag: '经济', desc: (n) => `每次调用 Token 用量 -${10 * n}%（向上取整，至少 1）` },
+  { id: 'c_mag', rarity: 'common', name: '扩展配额', icon: '额', max: 3, tag: '经济', desc: (n) => `之后发放的订阅额度 +${25 * n}% · 不补发当前额度` },
   { id: 'c_rate', rarity: 'common', name: '狂热扣扳', icon: '速', max: 4, tag: '火力', desc: (n) => `射速 +${12 * n}%` },
   { id: 'c_dash', rarity: 'common', name: '溜了溜了', icon: '溜', max: 3, tag: '机动', desc: (n) => `冲刺冷却 -${[0, 18, 32, 44][n]}%` },
   { id: 'c_armor', rarity: 'common', name: '硬羽绒', icon: '甲', max: 3, tag: '生存', desc: (n) => `受到伤害 -${[0, 12, 22, 30][n]}%` },
@@ -353,7 +336,7 @@ export const CARDS = [
   { id: 'c_coin', rarity: 'common', name: '财迷鸭', icon: '财', max: 3, tag: '收益', desc: (n) => `击杀金币 +${25 * n}%` },
   { id: 'c_xp', rarity: 'common', name: '好学鸭', icon: '学', max: 3, tag: '收益', desc: (n) => `获得经验 +${25 * n}%` },
   { id: 'c_range', rarity: 'common', name: '加长枪管', icon: '远', max: 3, tag: '火力', desc: (n) => `射程 +${18 * n}% · 衰减后移` },
-  { id: 'c_ammo', rarity: 'common', name: '弹药囤积', icon: '囤', max: 3, tag: '续航', desc: (n) => `立即 +48 备弹 · 弹药箱拾取 +${50 * n}%` },
+  { id: 'c_ammo', rarity: 'common', name: '预算补贴', icon: '预', max: 3, tag: '经济', desc: (n) => `获得时 +30 金币 · 按量单价 -${10 * n}%（不减订阅费）` },
 
   // ---- 稀有（绿）：附带特效 ----
   { id: 'r_explosive', rarity: 'rare', name: '爆破弹', icon: '爆', max: 3, tag: '特效', desc: (n) => `命中引爆：半径 ${(2 + 0.4 * n).toFixed(1)} 造成 ${35 + 10 * n}% 溅射伤害` },
@@ -367,7 +350,7 @@ export const CARDS = [
   { id: 'r_dashBlast', rarity: 'rare', name: '铁头冲撞', icon: '撞', max: 2, tag: '特效', desc: (n) => `冲刺撞击造成 ${30 * n} 伤害并强力击退` },
   { id: 'r_burn', rarity: 'rare', name: '燃烧弹', icon: '燃', max: 2, tag: '特效', desc: (n) => `命中点燃：${8 * n} 伤害/秒，持续 3s` },
   { id: 'r_magnet', rarity: 'rare', name: '拾取磁铁', icon: '磁', max: 2, tag: '特效', desc: (n) => `拾取范围 ×${(1 + 1.4 * n).toFixed(1)} · 每次拾取回血 ${4 * n}` },
-  { id: 'r_ammoBack', rarity: 'rare', name: '弹药回收', icon: '收', max: 2, tag: '特效', desc: (n) => `击杀有 ${25 * n}% 概率回收 2 发备弹` },
+  { id: 'r_ammoBack', rarity: 'rare', name: '消费返现', icon: '返', max: 2, tag: '经济', desc: (n) => `击杀有 ${25 * n}% 概率额外获得 4 金币` },
 
   // ---- 传说（金）：最强特效 ----
   { id: 'g_chain', rarity: 'gold', name: '连锁闪电', icon: '链', max: 2, tag: '传说', desc: (n) => `命中电击弹射 ${n + 1} 个附近敌人，各受 ${60 + 15 * n}% 伤害` },
@@ -429,7 +412,7 @@ export function cardEffects(owned = {}, level = 1) {
   if (r('r_dashBlast')) mods.dashBlast = { damage: 30 * r('r_dashBlast'), knock: 9 };
   if (r('r_burn')) mods.burn = { dps: 8 * r('r_burn'), duration: 3 };
   if (r('r_magnet')) mods.magnet = { mul: 1 + 1.4 * r('r_magnet'), heal: 4 * r('r_magnet') };
-  if (r('r_ammoBack')) mods.ammoBack = 0.25 * r('r_ammoBack');
+  if (r('r_ammoBack')) mods.cashback = 0.25 * r('r_ammoBack');
   // 吃鸭补鸭：击杀回血 + 溢出治疗转护盾，让「回血卡」在满血时也不浪费
   if (r('r_killheal')) mods.overheal = 20 * r('r_killheal');
   if (r('g_chain')) mods.chain = { count: r('g_chain') + 1, mul: 0.6 + 0.15 * r('g_chain') };
@@ -445,8 +428,8 @@ export function cardEffects(owned = {}, level = 1) {
     dmgBonus: 1 + 0.12 * r('c_dmg'),
     maxHpBonus: 25 * r('c_hp'),
     speedBonus: 1 + 0.08 * r('c_speed'),
-    reloadMul: [1, 0.82, 0.67, 0.55][r('c_reload')],
-    magMul: 1 + 0.25 * r('c_mag'),
+    tokenCostMul: Math.max(0.01, 1 - 0.1 * r('c_reload')),
+    quotaMul: 1 + 0.25 * r('c_mag'),
     rateMul: 1 + 0.12 * r('c_rate'),
     dashCdMul: [1, 0.82, 0.68, 0.56][r('c_dash')],
     armorMul: [1, 0.88, 0.78, 0.7][r('c_armor')],
@@ -455,7 +438,7 @@ export function cardEffects(owned = {}, level = 1) {
     coinMul: 1 + 0.25 * r('c_coin'),
     xpMul: 1 + 0.25 * r('c_xp'),
     rangeMul: 1 + 0.18 * r('c_range'),
-    ammoPickupMul: 1 + 0.5 * r('c_ammo'),
+    meteredCostMul: Math.max(0.01, 1 - 0.1 * r('c_ammo')),
     killHeal: 6 * r('r_killheal'),
     // 技能解锁只看等级（开局1个，每3级+1）；金卡「乱杀精通」强化乱杀数值
     skills: skillsForLevel(level),
@@ -500,8 +483,9 @@ export function applyCards(lo, ef) {
     maxHp: lo.maxHp + ef.maxHpBonus,
     speedMul: lo.speedMul * ef.speedBonus,
     rpm: lo.rpm * (ef.rateMul ?? 1),
-    magSize: Math.round(lo.magSize * (ef.magMul ?? 1)),
-    reloadTime: lo.reloadTime * (ef.reloadMul ?? 1),
+    tokenCostMul: ef.tokenCostMul ?? 1,
+    quotaMul: ef.quotaMul ?? 1,
+    meteredCostMul: ef.meteredCostMul ?? 1,
     spreadMul: lo.spreadMul * (ef.spreadMul ?? 1),
     dmgMul: lo.dmgMul * (ef.armorMul ?? 1),
     range: lo.range * rm,
@@ -513,7 +497,6 @@ export function applyCards(lo, ef) {
     regen: ef.regen ?? 4,
     coinMul: ef.coinMul ?? 1,
     xpMul: ef.xpMul ?? 1,
-    ammoPickupMul: ef.ammoPickupMul ?? 1,
     skills: ef.skills,
     storm: ef.storm,
     shield: ef.shield,

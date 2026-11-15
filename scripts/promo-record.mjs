@@ -3,7 +3,10 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import WebSocket from 'ws';
+import { PLAN_IDS, MICROCOINS_PER_COIN, REFERENCE_DATE } from '../src/subscriptions.js';
+import { createPromoActions } from './promo-automation.mjs';
 
+const MECHANICS = 'subscriptions-tokens-v1';
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const PORT = 9224;
 const W = 1920, H = 1080;
@@ -72,6 +75,8 @@ const mark = async (name) => { markers[name] = await nowEpoch(); console.log('ma
 
 const snap = () => evaluate(`(() => { const g = window.__game; return {
   state: g.state, wave: g.wave, kills: g.kills, hp: Math.round(g.p.hp),
+  planId: g.planId, tokens: g.tokens, quotaGranted: g.quotaGranted, coins: g.coins,
+  calls: g.calls, tokensUsed: g.tokensUsed, subscription: g.subscription, protections: { ...g.protections },
   enemies: g.enemies.length, fps: g.engine.fps }; })()`);
 
 async function key(code, vk, down = true) {
@@ -93,6 +98,8 @@ async function clickSel(sel) {
   if (!r) throw new Error('visible, enabled element not found: ' + sel);
   await clickAt(r.x, r.y);
 }
+const { choosePlan, collectProtections } = createPromoActions({ evaluate, clickSel, key, sleep });
+
 const aimAt = (x, y, z) => evaluate(`(() => { const g = window.__game;
   const v = new (g.engine.camera.position.constructor)(${x}, ${y}, ${z}); v.project(g.engine.camera);
   return { x: (v.x + 1) / 2 * ${W}, y: (1 - v.y) / 2 * ${H} }; })()`).then((p) => mouse('mouseMoved', p.x, p.y));
@@ -106,6 +113,7 @@ const clearField = () => {
       if (!card) throw new Error('Missing pending card before staging');
       g.pickCard(card.id);
     }
+    if (g.state === 'weapons' && g.planId === null) throw new Error('Confirm an initial paid plan before staging');
     if (g.state === 'weapons') g.closeWeapons();
     if (g.state === 'cardbook') g.closeCardBook();
     if (g.state === 'paused') g.resume();
@@ -155,11 +163,17 @@ try {
   stage = 'title';
   await sleep(3000);
 
-  // ---- beauty: 开局后清场 + 隐藏 HUD + 环绕运镜 ----
+  // ---- initialPlan: 开局冻结选择；真实支付 DS 首波费用后才进入 playing ----
+  await mark('initialPlan');
+  stage = 'initialPlan';
+  await clickSel('#startBtn');
+  await sleep(1400);
+  await choosePlan('ds');
+  await sleep(400);
+
+  // ---- beauty: 付费开局后清场 + 隐藏 HUD + 环绕运镜 ----
   await mark('beauty');
   stage = 'beauty';
-  await clickSel('#startBtn');
-  await sleep(400);
   await clearField();
   await evaluate(`(() => { const g = window.__game;
     window.__musicDest = g.audio.ctx.createMediaStreamDestination();
@@ -186,7 +200,9 @@ try {
     g.engine.updateCamera = window.__origCam;
     document.getElementById('hud').classList.add('on');
     document.getElementById('crosshair').style.display = '';
-    g.coins = 2000; g.openWeapons(); g.buyGun('qwen'); g.closeWeapons();
+    g.coins = 2000; return 1; })()`); // 摆拍资金，不增加累计收入；额度仍须真实付费发放。
+  await choosePlan('qwen');
+  await evaluate(`(() => { const g = window.__game;
     g.interT = 0; g.bot = true; g.p.iframes = 30; return 1; })()`);
   keeper = setInterval(async () => {
     try {
@@ -206,13 +222,13 @@ try {
   }, 1500);
   await sleep(8000);
 
-  // ---- combatB: GLM 霰弹枪近距爆发 ----
-  await mark('combatB');
+  // ---- combatB: GLM 一次调用五弹丸，仍只消耗一次基础 32 Token ----
   stage = 'combatB';
   await clearField();
-  await evaluate(`(() => { const g = window.__game;
-    g.coins = 2000; g.openWeapons(); g.buyGun('glm'); g.closeWeapons();
-    g.p.mag = g.loadout.magSize; g.p.reserve = 60; g.p.iframes = 30;
+  await evaluate('window.__game.coins = 2000');
+  await choosePlan('glm');
+  await mark('combatB');
+  await evaluate(`(() => { const g = window.__game; g.p.iframes = 30;
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); return 1; })()`);
   await evaluate(`(() => { const g = window.__game;
     for (let i = 0; i < 5; i++) { const a = -0.55 + i * 0.27; const d = 2.6 + (i % 2) * 0.7;
@@ -250,7 +266,7 @@ try {
   await evaluate(`(async () => { const g = window.__game; const { wavePlan } = await import('/src/rules.js');
     g.wave = 5; g.plan = wavePlan(5); g.spawnEnemy('boss');
     const b = g.enemies.find(e => e.type === 'boss');
-    g.bot = false; g.p.pos.set(0, 0, 0); g.p.iframes = 60; g.p.mag = 6; g.p.reserve = 60;
+    g.bot = false; g.p.pos.set(0, 0, 0); g.p.iframes = 60;
     b.hp = 210;
     window.__bossPin = setInterval(() => { const bb = g.enemies.find(e => e.type === 'boss');
       if (bb && !bb.dead) { bb.pos.set(0, 0, 3.6); bb.vel.set(0, 0, 0); bb.hp = 210; bb.duck.group.position.copy(bb.pos); } }, 50);
@@ -279,7 +295,7 @@ try {
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.mouse.down = false; g.keys.clear();
     g.addXp(120); return 1; })()`);
   await evaluate(`(async () => { const g = window.__game; const { CARD_BY_ID } = await import('/src/rules.js');
-    g.cardDraft = ['g_chain', 'r_frost', 'c_dmg'].map(id => ({ ...CARD_BY_ID[id], stacks: 0, next: 1 }));
+    g.cardDraft = ['g_chain', 'r_ammoBack', 'c_reload'].map(id => ({ ...CARD_BY_ID[id], stacks: 0, next: 1 }));
     g.state = 'card'; g.hud.cardOpen(true); g.hud.renderCards(g); g.audio.cardDeal(); return 1; })()`);
   await sleep(1600);
   await clickSel('#cardRow .pickCard.gold');
@@ -330,24 +346,21 @@ try {
   await tapKey('Digit4', 52); // 嘎瓦鲁多
   await sleep(3000);
 
-  // ---- shop: 最小武器面板（沿用旧标记）；三把付费枪真实购买，再切回免费 Claude ----
-  await mark('shop');
-  stage = 'shop';
+  // ---- plans: 五计划单一订阅；每次切换立即全费，切回也付费 ----
+  await mark('plans');
+  stage = 'plans';
   await clearField();
   await evaluate(`(() => { const g = window.__game;
-    // 独立分镜重置武器所有权，确保付费枪通过可见点击购买，而不是预先赠送。
-    g.equipGun('claude'); g.ownedGuns = ['claude']; g.mags = { claude: g.p.mag };
-    g.coins = 1600; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
+    // 只提供摆拍预算；不重置订阅、不伪造免费额度或永久所有权。
+    g.coins = 600; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
     return 1; })()`);
   await tapKey('KeyB', 66);
   await sleep(1000);
-  for (const id of ['qwen', 'glm', 'codex', 'claude']) {
-    await clickSel(`#weaponGrid .weaponCard[data-gun="${id}"]`);
+  for (const id of [...PLAN_IDS, 'claude', 'ds']) {
+    console.log('paid plan:', id, JSON.stringify(await choosePlan(id, { close: false })));
     await sleep(850);
-    const equipped = await evaluate(`(() => { const g = window.__game;
-      return g.state === 'weapons' && g.gunId === '${id}' && g.ownedGuns.includes('${id}'); })()`);
-    if (!equipped) throw new Error('Visible weapon purchase/equip failed: ' + id);
   }
+  console.log('same-plan no-op:', JSON.stringify(await choosePlan('ds', { close: false })));
   await tapKey('KeyB', 66);
   await sleep(500);
 
@@ -358,8 +371,13 @@ try {
   const benefits = await evaluate(`(async () => { const g = window.__game;
     const { LOOT_ITEMS } = await import('/src/rules.js');
     g.engine.updateCamera = window.__origCam;
-    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.reserve = 24;
-    return LOOT_ITEMS.map(({ id, coins, effect }) => ({ id, coins, heal: ['heal', 'fullheal'].includes(effect.kind) })); })()`);
+    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
+    const overtime = LOOT_ITEMS.find(it => it.id === 'overtime');
+    if (overtime?.coins !== 18 || overtime.effect.kind !== 'xp' || overtime.effect.amount !== 12) {
+      throw new Error('Outdated overtime fixture');
+    }
+    return LOOT_ITEMS.map(({ id, coins, effect }) => ({ id, coins,
+      xp: effect.kind === 'xp' ? effect.amount : 0, heal: ['heal', 'fullheal'].includes(effect.kind) })); })()`);
   for (const [i, benefit] of benefits.entries()) {
     const direction = i % 2 === 0 ? 1 : -1;
     const before = await evaluate(`(() => { const g = window.__game;
@@ -368,7 +386,9 @@ try {
       const pos = g.p.pos.clone();
       // 先放在磁铁吸取范围之外，让信封 / 礼盒 / 咖啡与标签有完整展示时间。
       pos.x += ${direction} * Math.max(3, 1.1 * (g.loadout.mods.magnet?.mul || 1) * 2.6 + 0.8);
-      g.spawnPickup(pos, 'loot', '${benefit.id}'); return g.coins; })()`);
+      g.spawnPickup(pos, 'loot', '${benefit.id}');
+      return { walletMicros: g.walletMicros, xpEarned: g.xpEarned,
+        xpDelta: Math.round(${benefit.xp} * g.loadout.xpMul) }; })()`);
     await sleep(1000);
     const code = direction > 0 ? 'KeyD' : 'KeyA', vk = direction > 0 ? 68 : 65;
     let collected = false;
@@ -378,7 +398,8 @@ try {
         await sleep(100);
         collected = await evaluate(`(() => { const g = window.__game;
           return !g.pickups.some(p => p.kind === 'loot' && p.item === '${benefit.id}')
-            && g.coins === ${before + benefit.coins}; })()`);
+            && g.walletMicros === ${before.walletMicros + benefit.coins * MICROCOINS_PER_COIN}
+            && g.xpEarned === ${before.xpEarned + before.xpDelta}; })()`);
         if (collected) break;
       }
     } finally { await key(code, vk, false); }
@@ -386,12 +407,23 @@ try {
     await sleep(650);
   }
 
-  // ---- over: 阵亡结算 ----
+  // ---- protections: 四种虚构保护物品真实拾取；只增加本地层数，不索取任何资料 ----
+  stage = 'protections';
+  await clearField();
+  await choosePlan('claude'); // 展示可降低但不能清零的风险；录制 RNG 仍固定为 1。
+  await mark('protections');
+  await collectProtections();
+
+  await tapKey('KeyB', 66); // 实际面板展示四种持有量与降低后仍大于零的 Claude 风险。
+  await sleep(1400);
+  await tapKey('KeyB', 66);
+
+  // ---- over: 确定性战斗阵亡结算，不让不死鸟 / 结界挡住分镜 ----
   await mark('over');
   stage = 'over';
   await evaluate(`(() => { const g = window.__game;
     g.engine.updateCamera = window.__origCam;
-    g.p.iframes = 0; g.damagePlayer(9999); return 1; })()`);
+    g.endRun('combat'); return 1; })()`);
   await sleep(5500);
   await mark('end');
 
@@ -415,7 +447,7 @@ try {
   const span = frames[frames.length - 1].ts - frames[0].ts;
   console.log(`captured ${frames.length} frames over ${span.toFixed(2)}s (${(frames.length / span).toFixed(1)}fps)`);
   console.log(`audio full=${(full.bytes / 1024).toFixed(0)}KB music=${(music.bytes / 1024).toFixed(0)}KB fullStart=${fullStart.toFixed(3)}`);
-  writeFileSync('shots/.promo-markers.json', JSON.stringify({ fullStart, markers, frames }, null, 1));
+  writeFileSync('shots/.promo-markers.json', JSON.stringify({ mechanics: MECHANICS, referenceDate: REFERENCE_DATE, fullStart, markers, frames }, null, 1));
   console.log('RECORD DONE');
 } catch (e) {
   console.error('RECORD ERROR', e.message);

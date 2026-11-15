@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getPlan } from './subscriptions.js';
 
 export const PALETTES = {
   player: { body: 0xffd95e, wing: 0xf2c53a, beak: 0xf08c1e, feet: 0xf08c1e, brow: 0x20180a, eye: 0x20180a, rim: 0xffb45e },
@@ -213,11 +214,12 @@ export class Duck {
     }
 
     this.gun = null;
-    this.magMesh = null;
     this.muzzle = null;
     this.melee = this.weapon === 'fists' || this.weapon === 'club' || this.weapon === 'knife';
+    const plan = palette === 'player' ? (getPlan(opts.planId) || getPlan('ds')) : null;
     const gunMetal = stdMat({ color: 0x3a3f46, roughness: 0.42, metalness: 0.8 });
-    const gunWood = stdMat({ color: opts.accent ?? 0x7a4a26, roughness: 0.65 });
+    const gunWood = stdMat({ color: opts.accent ?? plan?.accent ?? 0x7a4a26, roughness: 0.65 });
+    const coreMat = plan ? stdMat({ color: plan.accent, emissive: plan.accent, emissiveIntensity: 0.65, roughness: 0.4 }) : null;
     if (this.weapon === 'pistol' || this.weapon === 'rifle' || this.weapon === 'shotgun') {
       this.gun = new THREE.Group();
       if (this.weapon === 'pistol') {
@@ -250,20 +252,41 @@ export class Duck {
           pump.position.set(0, -0.03, 0.32);
           this.gun.add(pump);
         } else {
-          const mag = new THREE.Mesh(geo(THREE.BoxGeometry,0.07, 0.18, 0.1), gunMetal);
-          mag.position.set(0, -0.14, 0.02);
-          mag.rotation.x = 0.18;
-          this.gun.add(mag);
-          this.magMesh = mag;
-          if (opts.gunId === 'qwen') mag.scale.y = 1.35;
-          if (opts.gunId === 'codex') {
-            const scope = new THREE.Mesh(geo(THREE.CylinderGeometry,0.045, 0.045, 0.22, 10), gunMetal);
-            scope.rotation.x = Math.PI / 2;
-            scope.position.set(0, 0.14, 0.02);
-            this.gun.add(scope);
-            const mount = new THREE.Mesh(geo(THREE.BoxGeometry,0.035, 0.08, 0.07), gunWood);
-            mount.position.set(0, 0.09, 0.02);
-            this.gun.add(mount);
+          if (!plan) {
+            // 敌人保留普通步枪外形；玩家调用器没有可拆弹匣或换弹部件。
+            const housing = new THREE.Mesh(geo(THREE.BoxGeometry,0.07, 0.18, 0.1), gunMetal);
+            housing.position.set(0, -0.14, 0.02);
+            housing.rotation.x = 0.18;
+            this.gun.add(housing);
+          } else {
+            const core = new THREE.Mesh(geo(THREE.BoxGeometry,0.1, 0.06, 0.22), coreMat);
+            core.position.set(0, -0.055, 0.015);
+            this.gun.add(core);
+            if (plan.id === 'gpt') {
+              // 双导轨和环形照门：原创轮廓，不使用厂商标志。
+              for (const side of [-1, 1]) {
+                const rail = new THREE.Mesh(geo(THREE.BoxGeometry,0.026, 0.035, 0.3), gunWood);
+                rail.position.set(side * 0.06, 0.078, 0.04);
+                this.gun.add(rail);
+              }
+              const sightRing = new THREE.Mesh(geo(THREE.TorusGeometry,0.048, 0.012, 6, 12), gunMetal);
+              sightRing.position.set(0, 0.13, -0.1);
+              this.gun.add(sightRing);
+            } else if (plan.id === 'ds') {
+              const sleeve = new THREE.Mesh(geo(THREE.CylinderGeometry,0.047, 0.047, 0.18, 10), gunWood);
+              sleeve.rotation.x = Math.PI / 2;
+              sleeve.position.set(0, 0.02, 0.34);
+              this.gun.add(sleeve);
+              const fin = new THREE.Mesh(geo(THREE.BoxGeometry,0.11, 0.035, 0.25), coreMat);
+              fin.position.set(0, 0.08, 0.02);
+              this.gun.add(fin);
+            } else if (plan.id === 'qwen') {
+              for (let i = 0; i < 3; i++) {
+                const vent = new THREE.Mesh(geo(THREE.BoxGeometry,0.115, 0.026, 0.025), gunWood);
+                vent.position.set(0, 0.025, 0.13 + i * 0.055);
+                this.gun.add(vent);
+              }
+            }
           }
           const sight = new THREE.Mesh(geo(THREE.BoxGeometry,0.02, 0.05, 0.02), gunMetal);
           sight.position.set(0, 0.09, 0.3);
@@ -336,7 +359,6 @@ export class Duck {
     this.walkPhase = 0;
     this.blinkT = 1 + Math.random() * 3;
     this.recoil = 0;
-    this.reload = 0;
     this.deathT = -1;
     this.yaw = 0;
     this.t = Math.random() * 10;
@@ -361,8 +383,6 @@ export class Duck {
       this.root.rotation.y = this.yaw;
     }
     this.recoil = Math.max(0, this.recoil - dt * 7);
-    this.reload = st.reload || 0;
-    const rl = this.reload > 0 ? Math.sin(Math.PI * Math.min(1, this.reload)) : 0;
 
     if (this.deathT >= 0) {
       this.deathT += dt;
@@ -384,7 +404,7 @@ export class Duck {
     this.body.rotation.x = m * 0.07 - this.recoil * 0.06;
     this.head.position.y = 0.86 + bob * 1.25 + Math.sin(this.t * 2.2) * 0.012;
     this.head.rotation.z = -Math.sin(ph) * 0.05 * m;
-    this.head.rotation.x = -this.recoil * 0.1 + (st.aimPitch || 0) + rl * 0.3;
+    this.head.rotation.x = -this.recoil * 0.1 + (st.aimPitch || 0);
 
     this.feet[0].rotation.x = Math.sin(ph) * 0.75 * m;
     this.feet[1].rotation.x = -Math.sin(ph) * 0.75 * m;
@@ -398,13 +418,8 @@ export class Duck {
       this.wings[1].rotation.z = -0.3;
       this.wings[1].rotation.x = -0.85;
       this.gun.position.z = this.gunBaseZ - this.recoil * 0.1;
-      this.gun.rotation.x = -this.recoil * 0.12 + rl * 0.55;
-      this.wings[0].rotation.x = -rl * 1.1;
-      if (this.magMesh) {
-        const drop = this.reload < 0.5 ? this.reload * 2 : (1 - this.reload) * 2;
-        this.magMesh.position.y = -0.14 - drop * 0.38;
-        this.magMesh.visible = !(this.reload > 0.42 && this.reload < 0.58);
-      }
+      this.gun.rotation.x = -this.recoil * 0.12;
+      this.wings[0].rotation.x = 0;
     } else if (this.melee) {
       const w = st.windup || 0;
       this.wings[1].rotation.z = -0.25;

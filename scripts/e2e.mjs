@@ -93,8 +93,9 @@ async function shot(name) {
 
 const snap = () => evaluate(`(() => { const g = window.__game; return {
   state: g.state, wave: g.wave, kills: g.kills, shots: g.shots, hits: g.hits, score: g.score,
-  mag: g.p.mag, reserve: g.p.reserve, hp: Math.round(g.p.hp), enemies: g.enemies.length,
-  pickups: g.pickups.length, reloadT: +g.p.reloadT.toFixed(2), dashCd: +g.p.dashCd.toFixed(2),
+  planId: g.planId, coins: g.coins, walletMicros: g.walletMicros, tokens: g.tokens,
+  calls: g.calls, tokensUsed: g.tokensUsed, hp: Math.round(g.p.hp), enemies: g.enemies.length,
+  pickups: g.pickups.length, dashCd: +g.p.dashCd.toFixed(2),
   x: +g.p.pos.x.toFixed(2), z: +g.p.pos.z.toFixed(2), fps: g.engine.fps, time: +g.time.toFixed(2) }; })()`);
 
 const results = [];
@@ -127,7 +128,12 @@ try {
     await sleep(500);
   }
   if (!(await evaluate('!!window.__game'))) throw new Error('game boot failed: ' + errors.join(' | '));
-  await evaluate(`(() => { localStorage.removeItem('swyy_best'); window.__game.best = null; return 1; })()`);
+  await evaluate(`(() => {
+    localStorage.removeItem('swyy_best'); window.__game.best = null;
+    window.__game.banRng = () => 1; // 独立风险 RNG；无敌帧不豁免封号。
+    window.__resolveDraft = () => { const g = window.__game;
+      if (g.state === 'card') g.pickCard(g.cardDraft[0].id); };
+    return 1; })()`);
   await waitGame(22);
 
   const s1 = await snap();
@@ -149,17 +155,17 @@ try {
   await evaluate(`(() => { const g = window.__game;
     if (g.state === 'card') g.pickCard(g.cardDraft[0].id);
     g.bot = false; g.keys.clear(); g.mouse.down = false; g.mouseFire = false;
-    g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
+    window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
     g.cards = {}; g.cardHistory = []; g.recomputeLoadout(); g.p.iframes = 60; return 1; })()`);
-  await evaluate('(() => { const g = window.__game; g.p.mag = 24; g.p.reloadT = 0; g.p.reserve = 96; return 1; })()');
+  await evaluate('(() => { const g = window.__game; g.tokens = g.quotaGranted; g.p.fireT = 0; return 1; })()');
   const before = await snap();
   await mouse('mouseMoved', 450, 180);
   await mouse('mousePressed', 450, 180);
   await waitGame(0.6);
   await mouse('mouseReleased', 450, 180);
   const afterShot = await snap();
-  check('鼠标左键真实射击', afterShot.shots > before.shots && afterShot.mag < before.mag,
-    `shots ${before.shots}->${afterShot.shots}`);
+  check('鼠标左键真实射击并消耗 Token', afterShot.shots > before.shots && afterShot.tokens < before.tokens
+    && afterShot.calls > before.calls, `shots ${before.shots}->${afterShot.shots}, tokens ${before.tokens}->${afterShot.tokens}`);
 
   // 真实键盘移动
   await evaluate('(() => { const g = window.__game; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 3; return 1; })()');
@@ -169,35 +175,22 @@ try {
   check('W 键真实移动', afterMove.z < beforeMove.z - 0.5, `z ${beforeMove.z}->${afterMove.z}`);
 
   // 冲刺
-  await key('Space', 32, true); await sleep(400); await key('Space', 32, false);
+  await key('Space', 32, true); await waitGame(0.1); await key('Space', 32, false);
   const afterDash = await snap();
   check('空格冲刺触发冷却', afterDash.dashCd > 0.5, `dashCd=${afterDash.dashCd}`);
   await evaluate('window.__game.p.iframes = 60;');
 
-  // 换弹
-  await key('KeyR', 82, true); await sleep(400); await key('KeyR', 82, false);
-  const reloading = await snap();
-  check('R 键进入换弹', reloading.reloadT > 0, `reloadT=${reloading.reloadT}`);
-  await waitGame(2.0);
-  const reloaded = await snap();
-  check('换弹完成弹匣补满', reloaded.mag === 24, `mag=${reloaded.mag}`);
-
-  // 换弹动作 + 头顶换弹进度条
-  await evaluate('(() => { const g = window.__game; g.p.mag = 5; g.p.reserve = 96; g.p.reloadT = 0; g.startReload(); return 1; })()');
-  const rlSnap = () => evaluate(`(() => { const g = window.__game; const d = g.playerDuck;
-    const rb = g.playerHpBar.reload || { group: { visible: false }, fill: { scale: { x: 0 } } };
-    return { prog: +(d.reload || 0).toFixed(2), gunX: +d.gun.rotation.x.toFixed(2), headX: +d.head.rotation.x.toFixed(2),
-      barVis: rb.group.visible, w: +rb.fill.scale.x.toFixed(2) }; })()`);
-  let rl1 = await rlSnap();
-  for (let i = 0; i < 40 && !(rl1.prog >= 0.3 && rl1.prog <= 0.75); i++) { await sleep(150); rl1 = await rlSnap(); }
-  await sleep(400);
-  const rl2 = await rlSnap();
-  check('换弹时鸭鸭播放换弹动作', rl1.prog > 0 && rl1.prog < 1 && rl1.gunX > 0.15 && rl1.headX > 0.1, JSON.stringify(rl1));
-  check('头顶血条显示换弹进度条且推进', rl1.barVis && rl2.w > rl1.w && rl2.w <= 1.42, JSON.stringify({ rl1, rl2 }));
-  await waitGame(2.0);
-  const rl3 = await evaluate(`(() => { const g = window.__game;
-    return { barVis: g.playerHpBar.reload ? g.playerHpBar.reload.group.visible : false, prog: g.playerDuck.reload || 0, mag: g.p.mag }; })()`);
-  check('换弹完成后进度条隐藏', !rl3.barVis && rl3.prog === 0 && rl3.mag === 24, JSON.stringify(rl3));
+  // R 不再换弹或补充资源；旧弹药状态和进度 UI 必须真正删除。
+  const beforeR = await snap();
+  await key('KeyR', 82, true); await waitGame(0.1); await key('KeyR', 82, false);
+  const afterR = await snap();
+  const noReload = await evaluate(`(() => { const g = window.__game; return {
+    fields: ['mag', 'reserve', 'reloadT'].some(k => k in g.p),
+    method: typeof g.startReload === 'function', bar: 'reload' in g.playerHpBar,
+    dom: !!document.querySelector('#ammoPanel, #reloadHint') }; })()`);
+  check('R 键不再换弹、补额或收费，旧弹药字段/进度条已删除',
+    beforeR.calls === afterR.calls && beforeR.tokens === afterR.tokens && beforeR.walletMicros === afterR.walletMicros
+    && !noReload.fields && !noReload.method && !noReload.bar && !noReload.dom, JSON.stringify({ beforeR, afterR, noReload }));
 
   // 鼠标居中/近中时朝屏幕前方瞄准（不向后、不大幅横摆）
   // 先把相机落到「朝北(−z)」的收敛位姿：bot 战斗后相机朝向随机，低帧率下 lead 来不及摆正，
@@ -249,7 +242,7 @@ try {
 
   // 曳光穿准星定格截图：固定机位 + 零散布连射 + 慢弹速让曳光留在空中
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     for (const b of g.ebullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.ebullets = [];
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
@@ -261,7 +254,7 @@ try {
     return 1; })()`);
   await waitGame(0.6);
   await evaluate('(() => { window.__game.mouse.down = true; return 1; })()');
-  await sleep(900);
+  await waitGame(0.3);
   await shot('crosshair');
   await evaluate(`(() => { const g = window.__game; g.mouse.down = false;
     g.spreadNow = window.__origSpreadX; g.loadout.bulletSpeed = window.__origSpeedX;
@@ -273,7 +266,7 @@ try {
     return { cx: +m[1], cy: +m[2], mx: g.mouse.x, my: g.mouse.y }; })()`);
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     window.__waveX = { s: g.waveState, t: g.interT, q: [...g.spawnQueue] };
-    g.clearField(); g.waveState = 'inter'; g.interT = 999;
+    window.__resolveDraft(); g.clearField(); g.waveState = 'inter'; g.interT = 999;
     window.__collidersX = g.world.colliders; g.world.colliders = [];
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
     const v = g.aimPoint.clone().set(6, 0, 6).project(g.engine.camera);
@@ -324,7 +317,7 @@ try {
     JSON.stringify({ ...xo, ...xoSnap }));
   await shot('aim-impact');
   await evaluate(`(() => { const g = window.__game;
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     g.engine.updateCamera = window.__origCamOccl;
     g.world.colliders = window.__collidersX;
     g.waveState = window.__waveX.s; g.interT = window.__waveX.t; g.spawnQueue = window.__waveX.q;
@@ -333,7 +326,7 @@ try {
   // 射程限制：瞄准点超出射程时子弹在射程末端坠地，准星显示短落点，远处敌人不受伤害
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     window.__waveR = { s: g.waveState, t: g.interT, q: [...g.spawnQueue] };
-    g.clearField(); g.waveState = 'inter'; g.interT = 999;
+    window.__resolveDraft(); g.clearField(); g.waveState = 'inter'; g.interT = 999;
     window.__collidersR = g.world.colliders; g.world.colliders = [];
     for (const b of g.bullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.bullets = [];
@@ -358,15 +351,15 @@ try {
     return { vis: g.impactMarker ? g.impactMarker.visible : false,
       d: g.impactMarker ? +Math.hypot(g.impactMarker.position.x - g.impactPoint.x, g.impactMarker.position.z - g.impactPoint.z).toFixed(2) : -1 }; })()`);
   check('超射程时地面显示真实落点标记', rngMark.vis && rngMark.d < 0.3, JSON.stringify(rngMark));
-  const rngFire = await evaluate(`(async () => { const g = window.__game;
-    g.p.mag = 5; g.p.fireT = 0; g.fire();
-    const b = g.bullets[g.bullets.length - 1];
-    await new Promise(r => setTimeout(r, 600));
+  await evaluate(`(() => { const g = window.__game;
+    g.p.fireT = 0; g.fire(); window.__rangeBullet = g.bullets[g.bullets.length - 1]; return 1; })()`);
+  await waitGame(0.2);
+  const rngFire = await evaluate(`(() => { const g = window.__game, b = window.__rangeBullet;
     const e = g.enemies[g.enemies.length - 1];
     return { gone: !g.bullets.includes(b), traveled: +b.traveled.toFixed(2), hp: e.hp, hp0: window.__hpR }; })()`);
   check('子弹在射程末端坠地且未伤及射程外敌人', rngFire.gone && rngFire.traveled >= 5.5 && rngFire.traveled <= 6.6 && rngFire.hp === rngFire.hp0, JSON.stringify(rngFire));
   await evaluate(`(() => { const g = window.__game;
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     g.loadout.range = window.__rangeR; g.spreadNow = window.__spreadR;
     g.world.colliders = window.__collidersR;
     g.waveState = window.__waveR.s; g.interT = window.__waveR.t; g.spawnQueue = window.__waveR.q;
@@ -389,30 +382,28 @@ try {
     window.__origCamPick = g.engine.updateCamera.bind(g.engine);
     g.engine.updateCamera = () => { g.engine.camera.position.set(0, 2.0, 4.2); g.engine.camera.lookAt(0, 1.6, 0); };
     return 1; })()`);
-  await sleep(400);
+  await waitGame(0.1);
   await shot('pickup-text');
   await evaluate(`(() => { const g = window.__game; g.engine.updateCamera = window.__origCamPick; return 1; })()`);
 
   // 真实弹体：可见子弹 + 短拖尾，取代瞬时 beams
   const bulletVis = await evaluate(`(() => { const g = window.__game;
     for (const b of g.bullets) if (b.vis) g.engine.scene.remove(b.vis);
-    g.bullets.length = 0; g.fire();
+    g.bot = false; g.mouse.down = false; g.mouseFire = false;
+    g.bullets.length = 0; g.p.fireT = 0; g.fire();
     const b = g.bullets[g.bullets.length - 1];
+    window.__movingBullet = b; window.__bulletStart = b.vis.position.clone();
     return { hasVis: !!b.vis, children: b.vis ? b.vis.children.length : 0, beams: g.fx.tracers ? g.fx.tracers.length : 0 };
   })()`);
   check('玩家子弹生成可见弹体（无瞬时 beams）', bulletVis.hasVis && bulletVis.children === 2 && bulletVis.beams === 0, JSON.stringify(bulletVis));
-  const bulletMove = await evaluate(`(async () => { const g = window.__game;
-    const b = g.bullets[g.bullets.length - 1];
-    const p0 = b.vis.position.clone();
-    // 软件渲染可能低至 3fps（帧间隔 333ms），等待需覆盖至少 2 帧
-    await new Promise(r => setTimeout(r, 900));
-    const d = +p0.distanceTo(b.vis.position).toFixed(2);
-    b.life = 0.001;
-    await new Promise(r => setTimeout(r, 700));
-    return { d, removed: !g.bullets.includes(b), detached: b.vis.parent === null };
-  })()`);
+  await waitGame(0.1);
+  const bulletDistance = await evaluate(`(() => { const b = window.__movingBullet;
+    const d = +window.__bulletStart.distanceTo(b.vis.position).toFixed(2); b.life = 0.001; return d; })()`);
+  await waitGame(0.1);
+  const bulletMove = await evaluate(`(() => { const g = window.__game, b = window.__movingBullet;
+    return { d: ${bulletDistance}, removed: !g.bullets.includes(b), detached: b.vis.parent === null }; })()`);
   check('弹体随帧移动且到期后移除', bulletMove.d > 1 && bulletMove.removed && bulletMove.detached, JSON.stringify(bulletMove));
-  const ebVis = await evaluate(`(async () => { const g = window.__game;
+  await evaluate(`(() => { const g = window.__game;
     g.p.iframes = 60;
     const clear = (x, z) => g.world.colliders.every(c => c.hx !== undefined
       ? (Math.abs(x - c.x) > c.hx + 2 || Math.abs(z - c.z) > c.hz + 2)
@@ -423,8 +414,10 @@ try {
     const pos = g.p.pos.clone().set(spot[0], 1.2, spot[1]);
     const vel = g.p.vel.clone().set(14, 0, 0);
     const b = { pos, vel, life: 1, dmg: 1 };
-    g.ebullets.push(b);
-    await new Promise(r => setTimeout(r, 200));
+    g.ebullets.push(b); window.__enemyBullet = b; return 1;
+  })()`);
+  await waitGame(0.1);
+  const ebVis = await evaluate(`(() => { const g = window.__game, b = window.__enemyBullet;
     return { grp: !!b.spr && b.spr.isGroup === true, children: b.spr ? b.spr.children.length : 0, alive: g.ebullets.includes(b) };
   })()`);
   check('敌弹同样使用可见弹体', ebVis.grp && ebVis.children === 2 && ebVis.alive, JSON.stringify(ebVis));
@@ -439,18 +432,21 @@ try {
   await sleep(300);
   check('Esc 恢复', (await snap()).state === 'playing');
 
-  // 拾取
-  const reserveBefore = (await snap()).reserve;
-  await evaluate(`(() => { const g = window.__game; const v = g.p.pos.clone(); v.x += 0.4; g.spawnPickup(v, 'ammo'); return g.pickups.length; })()`);
-  await waitGame(1.0);
+  // 普通补给仅回血，不赠送 Token；真实生成后由游戏更新拾取。
+  const healthBefore = await evaluate(`(() => { const g = window.__game;
+    g.bot = false; g.p.hp = 40; g.p.lastHurt = g.time;
+    g.spawnPickup(g.p.pos.clone(), 'health'); return { hp: g.p.hp, tokens: g.tokens }; })()`);
+  await waitGame(0.2);
   const afterPick = await snap();
-  check('弹药拾取生效', afterPick.reserve > reserveBefore, `reserve ${reserveBefore}->${afterPick.reserve}`);
+  check('面包拾取回复 35 生命但不补 Token', afterPick.hp === healthBefore.hp + 35
+    && afterPick.tokens === healthBefore.tokens, JSON.stringify({ healthBefore, afterPick }));
 
-  // 武器面板：只购买/装备 AI 模型枪，不再有弹药商店、护具或背包出售
+  // 订阅全链路：冻结开局 → 首波/续订 → 付费切换 → 按量 → 保护 → 封号 → 重开。
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
-  await sleep(600);
   async function clickSel(sel) {
-    const r = await evaluate(`(() => { const b = document.querySelector('${sel}'); if (!b) return null; const rc = b.getBoundingClientRect(); return { x: rc.x + rc.width / 2, y: rc.y + rc.height / 2 }; })()`);
+    const r = await evaluate(`(() => { const b = document.querySelector('${sel}'); if (!b) return null;
+      b.scrollIntoView({ block: 'nearest' }); const rc = b.getBoundingClientRect();
+      return { x: rc.x + rc.width / 2, y: rc.y + rc.height / 2 }; })()`);
     if (!r) throw new Error('element not found: ' + sel);
     await mouse('mousePressed', r.x, r.y); await sleep(80); await mouse('mouseReleased', r.x, r.y);
     await sleep(250);
@@ -462,110 +458,189 @@ try {
   async function tapT() {
     await key('KeyT', 84, true); await sleep(120); await key('KeyT', 84, false); await sleep(320);
   }
-  const weaponSnap = () => evaluate(`(() => { const g = window.__game; return {
-    coins: g.coins, reserve: g.p.reserve, gunId: g.gunId, owned: [...g.ownedGuns], mag: g.p.mag,
-    magSize: g.loadout.magSize, pellets: g.loadout.pellets, model: g.playerDuck.weapon,
+  const subscriptionSnap = () => evaluate(`(() => { const g = window.__game; return {
+    state: g.state, planId: g.planId, coins: g.coins, earned: g.coinsEarned, walletMicros: g.walletMicros,
+    tokens: g.tokens, quota: g.quotaGranted, calls: g.calls, tokensUsed: g.tokensUsed,
+    paidWave: g.subscription.paidWave, processedWave: g.subscription.processedWave, status: g.subscriptionStatus,
+    pellets: g.loadout.pellets, model: g.playerDuck.weapon,
     wallet: document.getElementById('weaponCoins').textContent }; })()`);
   await evaluate(`(() => { const g = window.__game;
-    if (g.state === 'card') g.pickCard(g.cardDraft[0].id);
-    if (g.state === 'paused') g.resume();
-    g.bot = false; g.keys.clear(); g.mouse.down = false; g.mouseFire = false;
-    g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
-    g.coins = 1000; g.cards = { c_mag: 2 }; g.cardHistory = ['c_mag', 'c_mag'];
-    g.recomputeLoadout(); g.p.iframes = 60; return 1; })()`);
-  await key('KeyB', 66, true); await sleep(120); await key('KeyB', 66, false);
-  await sleep(350);
-  const weaponState = await snap();
-  check('B 键打开武器面板并暂停', weaponState.state === 'weapons');
+    g.bot = false; g.start(); g.banRng = () => 1; return 1; })()`);
+  const onboarding = await subscriptionSnap();
   const weaponDom = await evaluate(`(() => { const g = window.__game;
     const cards = [...document.querySelectorAll('#weaponGrid button.weaponCard')];
-    return { ids: cards.map(c => c.dataset.gun), hidden: document.getElementById('weaponScreen').classList.contains('hidden'),
+    return { ids: cards.map(c => c.dataset.plan), hidden: document.getElementById('weaponScreen').classList.contains('hidden'),
       complete: cards.every(c => ['canvas', '.weaponName', '.weaponTag', '.weaponStats', '.weaponPrice', '.weaponAction'].every(s => c.querySelector(s))),
-      buy: document.querySelector('#weaponGrid [data-gun="glm"] .weaponAction').textContent.trim(),
-      oldDom: !!document.querySelector('#shopScreen, #buyPane, #sellPane, .shopTabs, #tip'),
-      oldState: 'gear' in g || 'inv' in g,
-      oldMethods: ['buyGood', 'openShop', 'closeShop', 'sellItem'].some(k => typeof g[k] === 'function'),
+      action: document.querySelector('#weaponGrid [data-plan="glm"] .weaponAction').textContent.trim(),
+      focus: document.activeElement?.dataset.plan,
+      oldDom: !!document.querySelector('#shopScreen, #buyPane, #sellPane, .shopTabs, #tip, #ammoPanel'),
+      oldState: ['gear', 'inv', 'ownedGuns', 'gunId', 'mags'].some(k => k in g),
+      oldMethods: ['buyGood', 'openShop', 'closeShop', 'sellItem', 'buyGun', 'equipGun', 'cycleGun'].some(k => typeof g[k] === 'function'),
       keys: g.keys.size, mouse: g.mouse.down || g.mouseFire }; })()`);
-  check('武器面板仅渲染 4 把模型枪，卡面信息齐全',
-    JSON.stringify(weaponDom.ids) === JSON.stringify(['claude', 'qwen', 'glm', 'codex']) && !weaponDom.hidden
-    && weaponDom.complete && /购买|購買/.test(weaponDom.buy), JSON.stringify(weaponDom));
-  check('旧商店/出售/悬浮提示/背包护具接口已移除', !weaponDom.oldDom && !weaponDom.oldState && !weaponDom.oldMethods, JSON.stringify(weaponDom));
-  check('打开武器面板清空移动与鼠标输入', weaponDom.keys === 0 && !weaponDom.mouse, JSON.stringify({ keys: weaponDom.keys, mouse: weaponDom.mouse }));
-  const frozen0 = weaponState.time;
-  await sleep(900);
-  const frozen1 = (await snap()).time;
-  check('武器面板打开时战斗时间冻结', Math.abs(frozen1 - frozen0) < 0.05, `time ${frozen0}->${frozen1}`);
-  await shot('weapons');
-
-  const w0 = await weaponSnap();
-  await clickSel('#weaponGrid button[data-gun="glm"]');
-  const w1 = await weaponSnap();
-  check('真实点击购买 GLM：扣 400 金币、立即装备霰弹模型',
-    w1.coins === w0.coins - 400 && w1.gunId === 'glm' && w1.owned.includes('glm')
-    && w1.model === 'shotgun' && w1.pellets === 6 && w1.reserve === w0.reserve,
-    JSON.stringify({ w0, w1 }));
-  check('新购武器弹匣立即包含两层弹匣卡加成', w1.mag === 9 && w1.mag === w1.magSize, JSON.stringify(w1));
-  check('武器面板金币随购买实时更新', Number(w1.wallet.replace(/[^0-9]/g, '')) === w1.coins, JSON.stringify(w1));
-
-  await clickSel('#weaponGrid button[data-gun="codex"]');
-  const rejected = await weaponSnap();
-  check('金币不足不能购买 Codex，也不改变当前武器',
-    rejected.coins === w1.coins && rejected.gunId === 'glm' && !rejected.owned.includes('codex'), JSON.stringify(rejected));
-  await evaluate('window.__game.p.mag = 4');
-  await clickSel('#weaponGrid button[data-gun="claude"]');
-  const freeEquip = await weaponSnap();
-  await clickSel('#weaponGrid button[data-gun="glm"]');
-  const duplicate = await weaponSnap();
-  check('已购武器免费装备、重复点击不重复扣款或补满弹匣',
-    freeEquip.gunId === 'claude' && duplicate.gunId === 'glm' && duplicate.coins === w1.coins
-    && freeEquip.coins === w1.coins && duplicate.owned.length === 2 && duplicate.mag === 4,
-    JSON.stringify({ freeEquip, duplicate }));
-
+  check('开局冻结选择订阅，180 启动预算不计收入，默认聚焦但不代选 DS',
+    onboarding.state === 'weapons' && onboarding.planId === null && onboarding.coins === 180
+    && onboarding.earned === 0 && onboarding.tokens === 0 && weaponDom.focus === 'ds', JSON.stringify({ onboarding, weaponDom }));
+  check('面板仅渲染五家订阅，卡面信息齐全且无永久购枪后门',
+    JSON.stringify(weaponDom.ids) === JSON.stringify(['claude', 'gpt', 'qwen', 'glm', 'ds'])
+    && !weaponDom.hidden && weaponDom.complete && /订阅/.test(weaponDom.action)
+    && !weaponDom.oldDom && !weaponDom.oldState && !weaponDom.oldMethods, JSON.stringify(weaponDom));
+  check('开局面板清空移动与鼠标输入', weaponDom.keys === 0 && !weaponDom.mouse);
+  const frozen0 = (await snap()).time; await sleep(900); const frozen1 = (await snap()).time;
+  check('未确认订阅时战斗时间冻结', frozen1 === frozen0, `time ${frozen0}->${frozen1}`);
+  await shot('subscriptions');
+  await clickSel('#weaponGrid button[data-plan="ds"]');
+  await evaluate('window.__game.interT = 9999');
+  const selected = await subscriptionSnap();
+  check('真实点击 DS 支付 15 金币并发放 2000 Token 后进入战斗', selected.state === 'playing'
+    && selected.planId === 'ds' && selected.coins === 165 && selected.tokens === 2000 && selected.paidWave === 1, JSON.stringify(selected));
+  const renewal = await evaluate(`(() => { const g = window.__game;
+    g.nextWave(); const first = { coins: g.coins, tokens: g.tokens, wave: g.wave };
+    g.tokens = 17; g.nextWave();
+    const second = { coins: g.coins, tokens: g.tokens, wave: g.wave, paid: g.subscription.paidWave };
+    g.renewSubscription(g.wave); const once = { coins: g.coins, tokens: g.tokens };
+    window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999; return { first, second, once }; })()`);
+  check('首波预付不重复扣款，跨波只续费一次且丢弃旧额度',
+    renewal.first.wave === 1 && renewal.first.coins === 165 && renewal.first.tokens === 2000
+    && renewal.second.wave === 2 && renewal.second.coins === 150 && renewal.second.tokens === 2000
+    && renewal.second.paid === 2 && renewal.once.coins === 150 && renewal.once.tokens === 2000, JSON.stringify(renewal));
+  await key('KeyB', 66, true); await key('KeyB', 66, false); await sleep(200);
+  check('B 键打开订阅面板', (await snap()).state === 'weapons');
+  const switch0 = await subscriptionSnap();
+  await clickSel('#weaponGrid button[data-plan="glm"]');
+  const switched = await subscriptionSnap();
+  check('切换 GLM 立即支付 44 金币、刷新额度并保持面板打开', switched.state === 'weapons'
+    && switched.coins === switch0.coins - 44 && switched.planId === 'glm' && switched.tokens === 1600
+    && switched.model === 'shotgun' && switched.pellets === 5, JSON.stringify({ switch0, switched }));
+  check('订阅面板钱包随付费实时更新', Number(switched.wallet.replace(/[^0-9.]/g, '')) === switched.coins, JSON.stringify(switched));
+  await evaluate('window.__game.tokens = 7');
+  await clickSel('#weaponGrid button[data-plan="glm"]');
+  const duplicate = await subscriptionSnap();
+  check('点击当前计划既不扣款也不补充已用额度', duplicate.coins === switched.coins && duplicate.tokens === 7 && duplicate.planId === 'glm', JSON.stringify(duplicate));
+  await clickSel('#weaponGrid button[data-plan="ds"]');
+  const paidReturn = await subscriptionSnap();
+  check('切回曾用 DS 仍支付全额 15 金币并刷新额度', paidReturn.coins === switched.coins - 15
+    && paidReturn.tokens === 2000 && paidReturn.planId === 'ds', JSON.stringify(paidReturn));
   await clickSel('#weaponClose');
   check('关闭按钮恢复战斗', (await snap()).state === 'playing');
+  const prepaid = await evaluate(`(() => { const g = window.__game;
+    g.nextWave(); const out = { coins: g.coins, tokens: g.tokens, wave: g.wave, paid: g.subscription.paidWave };
+    window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999; return out; })()`);
+  check('波间付费切换预付下一波，进入下一波不再收费或重发额度', prepaid.wave === 3
+    && prepaid.paid === 3 && prepaid.coins === paidReturn.coins && prepaid.tokens === paidReturn.tokens, JSON.stringify(prepaid));
+  const metered = await evaluate(`(() => { const g = window.__game;
+    const before = { wallet: g.walletMicros, calls: g.calls, used: g.tokensUsed };
+    for (let i = 0; i < 62; i++) { g.p.fireT = 0; g.fire(); }
+    const included = { wallet: g.walletMicros, tokens: g.tokens, calls: g.calls };
+    g.p.fireT = 0; g.fire();
+    const mixed = { wallet: g.walletMicros, tokens: g.tokens, calls: g.calls, used: g.tokensUsed };
+    g.p.fireT = 0; g.fire();
+    const overage = { wallet: g.walletMicros, tokens: g.tokens, calls: g.calls, used: g.tokensUsed };
+    for (const b of g.bullets) if (b.vis) g.engine.scene.remove(b.vis); g.bullets = [];
+    return { before, included, mixed, overage }; })()`);
+  check('真实调用耗尽 DS 额度：62 次免费额度、混合调用精扣 0.156、随后按量扣 0.312 金币',
+    metered.included.tokens === 16 && metered.included.wallet === metered.before.wallet
+    && metered.included.calls === metered.before.calls + 62 && metered.mixed.tokens === 0
+    && metered.mixed.wallet === metered.before.wallet - 156000 && metered.mixed.calls === metered.before.calls + 63
+    && metered.overage.wallet === metered.mixed.wallet - 312000 && metered.overage.calls === metered.before.calls + 64
+    && metered.overage.used === metered.before.used + 64 * 32, JSON.stringify(metered));
+  await waitGame(0.1);
+  const tokenHud = await evaluate(`(() => { const g = window.__game; return {
+    tokens: document.getElementById('tokensRemaining').textContent,
+    status: document.getElementById('subscriptionStatus').textContent,
+    usage: document.getElementById('usageHint').textContent,
+    panel: !!document.getElementById('subscriptionPanel'), wallet: g.walletMicros }; })()`);
+  check('Token HUD 额度耗尽后明确显示按量状态与单次用量', tokenHud.panel && /0/.test(tokenHud.tokens)
+    && /按量/.test(tokenHud.status + tokenHud.usage) && /32/.test(tokenHud.usage), JSON.stringify(tokenHud));
+  const unfunded = await evaluate(`(() => { const g = window.__game; g.coins = 0; g.tokens = 31; g.p.fireT = 0;
+    const before = { calls: g.calls, used: g.tokensUsed, shots: g.shots };
+    g.fire(); g.fire(); return { before, calls: g.calls, used: g.tokensUsed, shots: g.shots,
+      tokens: g.tokens, wallet: g.walletMicros, bullets: g.bullets.length }; })()`);
+  check('零金币且不足整次调用时原子拒绝，不吞剩余 Token、不出弹、不欠债', unfunded.wallet === 0
+    && unfunded.tokens === 31 && unfunded.calls === unfunded.before.calls && unfunded.used === unfunded.before.used
+    && unfunded.shots === unfunded.before.shots && unfunded.bullets === 0, JSON.stringify(unfunded));
+  // 技能与收入仍可恢复无余额局；不偷偷生成免费 Token 箱。
+  await evaluate(`(() => { const g = window.__game;
+    for (let i = 0; i < 2; i++) g.spawnPickup(g.p.pos.clone(), 'loot', 'stock');
+    g.updatePickups(0.016); g.openWeapons(); return 1; })()`);
+  await clickSel('#weaponGrid button[data-plan="claude"]'); await clickSel('#weaponClose');
+  const protections = await evaluate(`(async () => { const g = window.__game;
+    const { PROTECTION_ITEMS } = await import('/src/subscriptions.js');
+    const before = g.currentBanChance(), coins = g.walletMicros, tokens = g.tokens;
+    for (const item of PROTECTION_ITEMS) g.spawnPickup(g.p.pos.clone(), 'protection', item.id);
+    g.updatePickups(0.016); g.updatePickups(0.016); g.hud.subscription(g);
+    return { before, after: g.currentBanChance(), stacks: { ...g.protections },
+      sameFunds: g.walletMicros === coins && g.tokens === tokens,
+      dom: [...document.querySelectorAll('#protectionCounts [data-protection]')].map(el => ({ id: el.dataset.protection, text: el.textContent })),
+      left: g.pickups.length }; })()`);
+  check('四种保护物品真实拾取各叠一层，只结算一次且不赠送 Token/金币', protections.left === 0
+    && protections.sameFunds && ['us_phone', 'us_credit', 'us_ip', 'kyc'].every(id => protections.stacks[id] === 1)
+    && protections.dom.length === 4 && protections.dom.every(el => /1/.test(el.text)), JSON.stringify(protections));
+  check('四层保护把 Claude 每次虚构封号风险乘 0.8⁴ 但不归零', protections.before === 0.005
+    && Math.abs(protections.after - 0.005 * 0.8 ** 4) < 1e-12 && protections.after > 0, JSON.stringify(protections));
   await key('KeyB', 66, true); await key('KeyB', 66, false); await sleep(150);
   await key('Escape', 27, true); await key('Escape', 27, false); await sleep(200);
-  check('Esc 关闭武器面板而非切换到暂停', (await snap()).state === 'playing');
+  check('Esc 关闭已订阅面板而非切换到暂停', (await snap()).state === 'playing');
   await key('KeyB', 66, true); await key('KeyB', 66, false); await sleep(150);
   await key('KeyB', 66, true); await key('KeyB', 66, false); await sleep(200);
-  check('B 键也能关闭武器面板', (await snap()).state === 'playing');
-
-  // Q/E + 滚轮切枪（只在已购的 Claude / GLM 间循环）
-  await key('KeyQ', 81, true); await sleep(120); await key('KeyQ', 81, false); await sleep(250);
-  check('Q 键切上一把已购枪', (await evaluate('window.__game.gunId')) === 'claude');
-  await key('KeyE', 69, true); await sleep(120); await key('KeyE', 69, false); await sleep(250);
-  const swE = await evaluate(`(() => { const g = window.__game; return { gunId: g.gunId, pellets: g.loadout.pellets }; })()`);
-  check('E 键切下一把已购枪（GLM）', swE.gunId === 'glm' && swE.pellets === 6, JSON.stringify(swE));
-  await wheel(120); await sleep(200);
-  check('滚轮下滚切枪，跳过未购武器', (await evaluate('window.__game.gunId')) === 'claude');
-  await wheel(-120); await sleep(200);
-  check('滚轮上滚切回 GLM', (await evaluate('window.__game.gunId')) === 'glm');
+  check('B 键也能关闭订阅面板', (await snap()).state === 'playing');
+  const noSwitch0 = await subscriptionSnap();
+  for (const [code, vk] of [['KeyQ', 81], ['KeyE', 69]]) { await key(code, vk, true); await key(code, vk, false); }
+  await wheel(120); await wheel(-120);
+  const noSwitch1 = await subscriptionSnap();
+  check('战斗 Q/E 与滚轮不再免费切换，也不误扣订阅费', noSwitch1.planId === noSwitch0.planId
+    && noSwitch1.walletMicros === noSwitch0.walletMicros && noSwitch1.tokens === noSwitch0.tokens, JSON.stringify({ noSwitch0, noSwitch1 }));
+  const banned = await evaluate(`(() => { const g = window.__game;
+    g.cards = { g_phoenix: 1, g_guardian: 2 }; g.recomputeLoadout(); g.guardianCd = 0;
+    g.p.iframes = 999; g.addShield(1000); g.p.skillShield = 80; g.p.shieldSkillT = 60;
+    g.spawnPickup(g.p.pos.clone(), 'loot', 'salary');
+    const before = { tokens: g.tokens, calls: g.calls, used: g.tokensUsed, coins: g.walletMicros, earned: g.coinsEarned };
+    window.__banResultsCalls = 0; const results = g.hud.results;
+    g.hud.results = function (...args) { window.__banResultsCalls++; return results.apply(this, args); };
+    g.banRng = () => 0; g.p.fireT = 0; g.fire(); g.endRun('combat'); g.update(0.05);
+    g.hud.results = results;
+    return { before, state: g.state, hp: g.p.hp, tokens: g.tokens, calls: g.calls, used: g.tokensUsed,
+      coins: g.walletMicros, earned: g.coinsEarned, shots: g.bullets.length, phoenix: g.phoenixUsed,
+      settlements: window.__banResultsCalls, reason: document.getElementById('overSub').textContent + ' ' + document.getElementById('overReason').textContent }; })()`);
+  check('强制封号绕过无敌/护盾/结界/不死鸟，已付调用只耗一次资源且不出弹', banned.state === 'over'
+    && banned.hp === 0 && banned.tokens === banned.before.tokens - 32 && banned.calls === banned.before.calls + 1
+    && banned.used === banned.before.used + 32 && banned.coins === banned.before.coins && banned.shots === 0 && !banned.phoenix, JSON.stringify(banned));
+  check('封号仅结算一次、死亡帧不再领工资，结果说明是 Claude 的虚构游戏机制', banned.settlements === 1
+    && banned.earned === banned.before.earned && /Claude/i.test(banned.reason) && /游戏|虚构/.test(banned.reason), JSON.stringify(banned));
+  await sleep(1400); await shot('subscription-ban');
+  await clickSel('#retryBtn');
+  const reset = await subscriptionSnap();
+  const resetProtections = await evaluate('Object.values(window.__game.protections)');
+  check('封号后真实点击重开返回订阅选择，预算/额度/调用/保护完整重置', reset.state === 'weapons'
+    && reset.planId === null && reset.coins === 180 && reset.earned === 0 && reset.tokens === 0
+    && reset.calls === 0 && reset.tokensUsed === 0 && resetProtections.every(n => n === 0), JSON.stringify({ reset, resetProtections }));
+  await evaluate('window.__game.banRng = () => 1');
+  await clickSel('#weaponGrid button[data-plan="ds"]');
+  await evaluate('window.__game.waveState = "inter"; window.__game.interT = 9999');
 
   // 福利：真实 spawnPickup → updatePickups，金币与即时效果一次到账，无背包积压
   const benefits = await evaluate(`(async () => { const g = window.__game; const { LOOT_ITEMS } = await import('/src/rules.js');
     const rows = [];
     for (const item of LOOT_ITEMS) {
-      g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
+      window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
       g.cards = {}; g.cardHistory = []; g.level = 1; g.xp = 0; g.xpEarned = 0; g.recomputeLoadout();
-      g.p.hp = 10; g.p.reserve = 0; g.p.shield = 0; g.p.skillShield = 0; g.p.shieldMax = 0; g.p.shieldSkillT = 0;
+      g.p.hp = 10; g.p.shield = 0; g.p.skillShield = 0; g.p.shieldMax = 0; g.p.shieldSkillT = 0;
       g.p.hasteT = 0; g.p.rageT = 0; g.coins = 10; g.coinsEarned = 20;
       g.spawnPickup(g.p.pos.clone(), 'loot', item.id);
       const queued = g.pickups.length;
       g.updatePickups(0.016);
-      const first = { coins: g.coins, earned: g.coinsEarned, hp: g.p.hp, shield: g.p.shield, reserve: g.p.reserve,
-        hasteT: g.p.hasteT, rageT: g.p.rageT, xp: g.xpEarned };
+      const first = { coins: g.coins, earned: g.coinsEarned, hp: g.p.hp, shield: g.p.shield,
+        hasteT: g.p.hasteT, rageT: g.p.rageT, xp: g.xpEarned, tokens: g.tokens };
       g.updatePickups(0.016);
       rows.push({ id: item.id, coins: item.coins, queued, left: g.pickups.length, first,
         once: first.coins === g.coins && first.earned === g.coinsEarned, noInventory: !('inv' in g) });
     }
-    g.p.reserve = 96;
     return rows; })()`);
   check('全部 9 种福利拾取即加金币且只结算一次，不产生背包',
     benefits.length === 9 && benefits.every(r => r.queued === 1 && r.left === 0 && r.once && r.noInventory
     && r.first.coins === 10 + r.coins && r.first.earned === 20 + r.coins), JSON.stringify(benefits));
   const benefitExpected = {
     subsidy: ['hp', 20], welfare: ['shield', 20], salary: ['hp', 35], coffee: ['hasteT', 5],
-    overtime: ['reserve', 16], performance: ['xp', 30], bonus: ['rageT', 4], yearbonus: ['hp', 70], stock: ['hp', 100],
+    overtime: ['xp', 12], performance: ['xp', 30], bonus: ['rageT', 4], yearbonus: ['hp', 70], stock: ['hp', 100],
   };
   for (const row of benefits) {
     const [field, expected] = benefitExpected[row.id];
@@ -576,7 +651,7 @@ try {
   // 每波肃清会弹三选一强化卡（新系统），确定性测试期间先挂起出怪，避免随机插入选卡界面
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     g.p.iframes = 60; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
-    g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999; return 1; })()`);
+    window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999; return 1; })()`);
 
   const xp0 = await evaluate(`(() => { const g = window.__game; g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
     e.pos.set(2, 0, 2); e.hp = 1; const before = g.xpEarned; g.killEnemy(e); return { before, after: g.xpEarned }; })()`);
@@ -589,7 +664,7 @@ try {
 
   // 波次肃清 → 三选一强化卡
   const draft = await evaluate(`(() => { const g = window.__game;
-    g.clearField(); g.spawnQueue = []; g.waveState = 'fight';
+    window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'fight';
     g.updateWaves(0.016);
     const cards = [...document.querySelectorAll('#cardRow .pickCard')];
     return { state: g.state, n: cards.length, ids: (g.cardDraft || []).map(c => c.id),
@@ -626,7 +701,7 @@ try {
     && +dmg1.chip === dmg0.hist + 1, JSON.stringify(dmg1));
 
   // 数字键直选第二张
-  await evaluate(`(() => { const g = window.__game; g.clearField(); g.spawnQueue = [];
+  await evaluate(`(() => { const g = window.__game; window.__resolveDraft(); g.clearField(); g.spawnQueue = [];
     g.waveState = 'fight'; g.updateWaves(0.016); return 1; })()`);
   const k2 = await evaluate(`(() => { const g = window.__game; const id = g.cardDraft[1].id;
     return { id, stacks: g.cards[id] || 0, hist: g.cardHistory.length }; })()`);
@@ -661,7 +736,7 @@ try {
     g.waveState = 'inter'; g.interT = 9999; return 1; })()`);
 
   const stormSetup = await evaluate(`(() => { const g = window.__game;
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     for (let i = 0; i < 3; i++) { g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1]; e.pos.set(1.5 + i * 0.4, 0, 1.5); e.duck.group.position.copy(e.pos); e.hp = 30; }
     g.p.pos.set(0, 0, 0); g.p.iframes = 60; return { kills: g.kills }; })()`);
   await key('Digit1', 49, true); await sleep(120); await key('Digit1', 49, false); await sleep(300);
@@ -705,32 +780,35 @@ try {
   await key('Digit3', 51, true); await sleep(120); await key('Digit3', 51, false); await sleep(250);
   const rageOn = await evaluate(`(() => { const g = window.__game; return { rageT: +g.p.rageT.toFixed(1), cd: +g.skillCd.rage.toFixed(1) }; })()`);
   check('Digit3 释放红温暴走', rageOn.rageT > 5 && rageOn.cd > 18, JSON.stringify(rageOn));
-  const rageDmg = await evaluate(`(() => { const g = window.__game; g.p.mag = 24; g.p.fireT = 0; g.aimPoint.set(0, 0.7, 5); g.fire(); const b = g.bullets[g.bullets.length - 1]; return { dmg: +b.dmg.toFixed(2), expect: +(g.loadout.damage * g.loadout.rage.dmgMul).toFixed(2) }; })()`);
+  const rageDmg = await evaluate(`(() => { const g = window.__game; g.p.fireT = 0; g.aimPoint.set(0, 0.7, 5); g.fire(); const b = g.bullets[g.bullets.length - 1]; return { dmg: +b.dmg.toFixed(2), expect: +(g.loadout.damage * g.loadout.rage.dmgMul).toFixed(2) }; })()`);
   check('红温暴走按倍率提升子弹伤害', Math.abs(rageDmg.dmg - rageDmg.expect) < 0.02, JSON.stringify(rageDmg));
   const skillDom = await evaluate(`(() => [...document.querySelectorAll('#skillBar .slot')].map(s => ({ skill: s.dataset.skill, locked: s.classList.contains('locked'), active: s.classList.contains('active') })))()`);
   check('技能栏四格全部解锁且红温暴走高亮', skillDom.every(s => !s.locked) && skillDom.find(s => s.skill === 'rage').active, JSON.stringify(skillDom));
   await shot('skill');
 
-  // 霰弹枪弹丸计数 + 低弹药兜底 + 场外威胁预警
+  // GLM 一次付费调用生成五弹丸，保留命中统计与场外威胁预警覆盖。
   const sgBefore = await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
-    g.p.mag = 6; g.p.reserve = 0; g.p.iframes = 60; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
-    g.clearField(); g.spawnQueue = [];
+    g.openWeapons(); if (!g.subscribe('glm')) throw new Error('GLM staging subscription failed'); g.closeWeapons();
+    g.p.fireT = 0; g.p.iframes = 60; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
+    window.__resolveDraft(); g.clearField(); g.spawnQueue = [];
     for (let i = 0; i < 3; i++) g.spawnEnemy('brawler');
-    return { shots: g.shots, hits: g.hits, kills: g.kills, threats: document.querySelectorAll('.threat').length }; })()`);
+    return { shots: g.shots, hits: g.hits, kills: g.kills, tokens: g.tokens, calls: g.calls,
+      wallet: g.walletMicros, threats: document.querySelectorAll('.threat').length }; })()`);
   check('场外出生触发威胁预警', sgBefore.threats > 0, `threats=${sgBefore.threats}`);
   await evaluate(`(() => { const g = window.__game;
     g.enemies.forEach((e, i) => { e.pos.set(1.2 + i * 0.3, 0, 1.2); e.duck.group.position.copy(e.pos); e.hp = 1; });
     g.aimPoint.set(1.5, 0.7, 1.2); g.fire(); return 1; })()`);
   await waitGame(0.6);
-  const sgAfter = await evaluate(`(() => { const g = window.__game; return { shots: g.shots, hits: g.hits, kills: g.kills, ammo: g.pickups.filter(p => p.kind === 'ammo').length }; })()`);
-  check('霰弹枪一次射击计 6 弹丸', sgAfter.shots - sgBefore.shots === 6, `shots +${sgAfter.shots - sgBefore.shots}`);
-  check('霰弹枪命中率不超 100%', sgAfter.hits <= sgAfter.shots, `hits=${sgAfter.hits} shots=${sgAfter.shots}`);
-  check('低弹药击杀必掉弹药箱', sgAfter.kills > sgBefore.kills && sgAfter.ammo >= sgAfter.kills - sgBefore.kills,
-    `kills +${sgAfter.kills - sgBefore.kills} ammo=${sgAfter.ammo}`);
+  const sgAfter = await evaluate(`(() => { const g = window.__game; return { shots: g.shots, hits: g.hits,
+    kills: g.kills, tokens: g.tokens, calls: g.calls, hasAmmo: g.pickups.some(p => p.kind === 'ammo') }; })()`);
+  check('GLM 一次调用只扣 32 Token，准确记录五弹丸', sgAfter.shots - sgBefore.shots === 5
+    && sgAfter.calls === sgBefore.calls + 1 && sgAfter.tokens === sgBefore.tokens - 32, JSON.stringify({ sgBefore, sgAfter }));
+  check('GLM 命中率不超 100% 且真实击杀，不产生旧弹药补给', sgAfter.hits <= sgAfter.shots
+    && sgAfter.kills > sgBefore.kills && !sgAfter.hasAmmo, JSON.stringify(sgAfter));
 
   // Boss 生成 / 血量成长 / 血条 / 皇冠
   const bossInfo = await evaluate(`(async () => { const g = window.__game; const { wavePlan } = await import('/src/rules.js');
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     g.wave = 5; g.plan = wavePlan(5); g.spawnEnemy('boss');
     const b = g.enemies.find(e => e.type === 'boss');
     b.pos.set(4, 0, 4); b.duck.group.position.copy(b.pos);
@@ -747,7 +825,7 @@ try {
     window.__origCam2 = g.engine.updateCamera.bind(g.engine);
     g.engine.updateCamera = () => { g.engine.camera.position.set(b.pos.x + 4, 2.2, b.pos.z + 5.6); g.engine.camera.lookAt(b.pos.x, 2.0, b.pos.z); };
     return 1; })()`);
-  await sleep(1200);
+  await waitGame(0.2);
   await shot('boss');
   await evaluate(`(() => { const g = window.__game; g.engine.updateCamera = window.__origCam2;
     const b = g.enemies.find(e => e.type === 'boss');
@@ -777,7 +855,7 @@ try {
     window.__origCam3 = g.engine.updateCamera.bind(g.engine);
     g.engine.updateCamera = () => { g.engine.camera.position.set(e.pos.x + 2.6, 1.5, e.pos.z + 3.6); g.engine.camera.lookAt(e.pos.x, 1.2, e.pos.z); };
     return 1; })()`);
-  await sleep(1200);
+  await waitGame(0.2);
   await shot('elite');
   const eliteScore = await evaluate(`(async () => { const g = window.__game; const { scoreFor } = await import('/src/rules.js');
     g.engine.updateCamera = window.__origCam3;
@@ -793,7 +871,7 @@ try {
   // 精英大范围技能：预警圈 + 圈内伤害（空旷站位；暂清碰撞体，避免木箱把冲锋路径挤到圈边）
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     window.__colsBackup = g.world.colliders; g.world.colliders = [];
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     for (const b of g.ebullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.ebullets = [];
     g.spawnEnemy({ type: 'brawler', elite: true });
@@ -810,7 +888,7 @@ try {
     window.__origCamStomp = g.engine.updateCamera.bind(g.engine);
     g.engine.updateCamera = () => { g.engine.camera.position.set(9, 8, 15); g.engine.camera.lookAt(7.5, 0.5, 8.5); };
     return 1; })()`);
-  await sleep(600);
+  await waitGame(0.2);
   await shot('elite-skill');
   await evaluate(`(() => { const g = window.__game; g.engine.updateCamera = window.__origCamStomp; return 1; })()`);
   await waitGame(1.2);
@@ -820,7 +898,7 @@ try {
   // Boss 全图技能：远距离仍命中 + 冲刺无敌帧可闪避
   await evaluate(`(() => { const g = window.__game;
     g.world.colliders = window.__colsBackup;
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     for (const b of g.ebullets) if (b.vis) g.engine.scene.remove(b.vis);
     g.ebullets = [];
     g.spawnEnemy('boss');
@@ -838,7 +916,7 @@ try {
     window.__origCamNova = g.engine.updateCamera.bind(g.engine);
     g.engine.updateCamera = () => { g.engine.camera.position.set(0, 26, 24); g.engine.camera.lookAt(0, 0, 0); };
     return 1; })()`);
-  await sleep(600);
+  await waitGame(0.2);
   await shot('boss-skill');
   await evaluate(`(() => { const g = window.__game; g.engine.updateCamera = window.__origCamNova; return 1; })()`);
   await waitGame(1.6);
@@ -863,7 +941,7 @@ try {
 
   // GLM 模型枪上身特写
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.mouse.down = false; g.keys.clear();
-    g.clearField();
+    window.__resolveDraft(); g.clearField();
     for (const b of g.ebullets) if (b.spr) g.engine.scene.remove(b.spr);
     g.ebullets = [];
     g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
@@ -874,7 +952,7 @@ try {
     const du = g.playerDuck; const orig = du.update.bind(du);
     du.update = (dt, st) => orig(dt, Object.assign({}, st, { aimYaw: 0.62, moving: false }));
     return 1; })()`);
-  await sleep(1500);
+  await waitGame(0.3);
   await shot('weapon-closeup');
   await evaluate(`(() => { const g = window.__game; g.engine.updateCamera = window.__origCam; return 1; })()`);
 
@@ -917,8 +995,11 @@ try {
   await sleep(600);
   console.log('click log:', JSON.stringify(await evaluate('window.__clickLog')));
   const restarted = await snap();
-  check('点击再次守卫重开', restarted.state === 'playing' && restarted.hp === 100 && restarted.kills === 0,
+  check('点击再次守卫重开到冻结订阅选择', restarted.state === 'weapons' && restarted.planId === null
+    && restarted.hp === 100 && restarted.kills === 0 && restarted.coins === 180,
     `state=${restarted.state} hp=${restarted.hp}`);
+  await clickSel('#weaponGrid button[data-plan="ds"]');
+  await evaluate('window.__game.banRng = () => 1; window.__game.interT = 9999');
 
   // 子弹 swept 碰撞：大步长不得穿透障碍物
   const blockTest = await evaluate(`(() => { const g = window.__game;
@@ -938,7 +1019,7 @@ try {
 
   // ===== 枪口火光缩小 =====
   const flashNow = await evaluate(`(() => { const g = window.__game;
-    g.p.mag = 24; g.p.fireT = 0; g.fire();
+    g.p.fireT = 0; g.fire();
     let maxS = 0, maxI = 0;
     for (const f of g.fx.flashes) if (f.life > 0) maxS = Math.max(maxS, f.s.scale.x);
     for (const l of g.fx.lights) maxI = Math.max(maxI, l.intensity);
@@ -951,13 +1032,13 @@ try {
   const fragileHp = await evaluate(`(() => { const g = window.__game; g.fragile = true; g.start(); return g.p.hp; })()`);
   check('fragile 模式重开保持 1 HP', fragileHp === 1, `hp=${fragileHp}`);
   const fragileBenefit = await evaluate(`(() => { const g = window.__game; g.coins = 9999;
-    g.openWeapons(); g.buyGun('glm'); g.closeWeapons();
+    if (!g.subscribe('glm')) throw new Error('fragile GLM subscription failed');
     g.cards.c_hp = 3; g.recomputeLoadout(); g.p.hp = 0.5;
     g.spawnPickup(g.p.pos.clone(), 'loot', 'stock'); g.updatePickups(0.016);
-    return { maxHp: g.p.maxHp, hp: g.p.hp, loMax: g.loadout.maxHp, gunId: g.gunId }; })()`);
-  check('fragile 模式购枪/叠生命卡/全额回血福利仍保持 1 HP', fragileBenefit.maxHp === 1
-    && fragileBenefit.hp === 1 && fragileBenefit.loMax > 1 && fragileBenefit.gunId === 'glm', JSON.stringify(fragileBenefit));
-  await evaluate(`(() => { const g = window.__game; g.fragile = false; g.start(); return 1; })()`);
+    return { maxHp: g.p.maxHp, hp: g.p.hp, loMax: g.loadout.maxHp, planId: g.planId }; })()`);
+  check('fragile 模式订阅/叠生命卡/全额回血福利仍保持 1 HP', fragileBenefit.maxHp === 1
+    && fragileBenefit.hp === 1 && fragileBenefit.loMax > 1 && fragileBenefit.planId === 'glm', JSON.stringify(fragileBenefit));
+  await evaluate(`(() => { const g = window.__game; g.fragile = false; g.bot = true; g.start(); g.banRng = () => 1; return 1; })()`);
 
   // 720p 战斗美景截图
   await evaluate('window.__game.bot = true');
@@ -974,9 +1055,10 @@ try {
     g.engine.updateCamera = () => { const p = g.p.pos;
       g.engine.camera.position.set(p.x + 1.5, 1.35, p.z + 2.1);
       g.engine.camera.lookAt(p.x, 0.72, p.z); }; return 1; })()`);
-  await sleep(1500);
+  await waitGame(0.3);
   await shot('closeup');
 
+  check('全流程无页面运行时异常', errors.length === 0, errors.slice(0, 4).join(' | '));
   const failed = results.filter((r) => !r.ok);
   console.log(`\nE2E ${results.length - failed.length}/${results.length} passed`);
   if (errors.length) console.log('runtime errors:', errors.slice(0, 5));

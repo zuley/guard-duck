@@ -2,11 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { Object3D, Vector3 } from 'three';
 import { Game } from '../src/game.js';
 import * as rules from '../src/rules.js';
+import { PLANS, STARTING_COINS } from '../src/subscriptions.js';
 import {
   WEAPON,
   ENEMY_TYPES,
   LOOT_ITEMS,
-  GUNS,
   mulberry32,
   wavePlan,
   waveIntro,
@@ -18,7 +18,6 @@ import {
   coinsFor,
   rollLoot,
   computeLoadout,
-  gunCatalog,
   xpForLevel,
   xpForKill,
   WAVE_CLEAR_XP,
@@ -50,25 +49,34 @@ const RANGED_WEAPONS = ['pistol', 'rifle', 'shotgun'];
 const totalOf = (p) => Object.values(p.counts).reduce((a, b) => a + b, 0);
 
 // 绕过 WebGL/DOM 构造器，直接测试真实 Game 方法；只替换音画输出。
-function makeGameHarness() {
+function makeGameHarness({ subscribed = true } = {}) {
   const game = Object.create(Game.prototype);
   Object.assign(game, {
-    state: 'playing', t: 0, keys: new Set(), mouse: { down: false }, mouseFire: false,
-    padAim: { x: 0, z: -1 }, rng: mulberry32(42), enemies: [], pickups: [], orbitals: [],
+    state: 'weapons', t: 0, keys: new Set(), mouse: { down: false }, mouseFire: false,
+    padAim: { x: 0, z: -1 }, rng: mulberry32(42), banRng: () => 1,
+    enemies: [], pickups: [], orbitals: [], bullets: [], ebullets: [],
     aimPoint: new Vector3(), impactPoint: new Vector3(), impactMarker: new Object3D(),
     world: { colliders: [], update: vi.fn() },
     engine: { scene: { add: vi.fn(), remove: vi.fn() }, addShake: vi.fn(), updateCamera: vi.fn() },
-    hud: { weaponsOpen: vi.fn(), renderWeapons: vi.fn(), toast: vi.fn(), banner: vi.fn(), damage: vi.fn() },
-    audio: { uiClick: vi.fn(), reload: vi.fn(), pickup: vi.fn(), skillCast: vi.fn(), hit: vi.fn(), hurt: vi.fn(), waveHorn: vi.fn(), levelUp: vi.fn() },
+    hud: {
+      weaponsOpen: vi.fn(), renderWeapons: vi.fn(), subscription: vi.fn(), coins: vi.fn(), results: vi.fn(),
+      toast: vi.fn(), banner: vi.fn(), damage: vi.fn(),
+    },
+    audio: { uiClick: vi.fn(), pickup: vi.fn(), skillCast: vi.fn(), hit: vi.fn(), hurt: vi.fn(), waveHorn: vi.fn(), levelUp: vi.fn() },
     fx: { ring: vi.fn(), number: vi.fn(), feathers: vi.fn(), update: vi.fn() },
     playerDuck: {
       group: new Object3D(), update: vi.fn(),
       muzzleWorld: (out) => out.copy(game.p.pos).setY(0.75),
     },
-    playerHpBar: { group: new Object3D(), fill: new Object3D(), reload: { group: new Object3D(), fill: new Object3D() } },
+    playerHpBar: { group: new Object3D(), fill: new Object3D() },
     rebuildPlayerDuck: vi.fn(),
   });
   game.resetStats();
+  // 战斗夹具也必须走真实的首次订阅，不能凭空注入一个免费计划。
+  if (subscribed) {
+    expect(game.subscribe('ds')).toBe(true);
+    expect(game.state).toBe('playing');
+  }
   return game;
 }
 
@@ -268,28 +276,43 @@ describe('精英强化单位', () => {
     expect(coinsFor('rifle', true)).toBe(3 * coinsFor('rifle'));
     expect(xpForKill('heavy', true)).toBe(3 * xpForKill('heavy'));
   });
-  it('精英必掉补给箱', () => {
+  it('精英保留 45% 回血分支，原弹药分支不再生成补给', () => {
+    expect(rollDrop(() => 0.549999, 'brawler', true)).toBeNull();
+    expect(rollDrop(() => 0.55, 'brawler', true)).toBe('health');
     const rng = mulberry32(7);
-    for (let i = 0; i < 20; i++) expect(['ammo', 'health']).toContain(rollDrop(rng, 'brawler', false, true));
+    for (let i = 0; i < 100; i++) expect(['health', null]).toContain(rollDrop(rng, 'brawler', true));
   });
 });
 
-describe('rollDrop', () => {
-  it('只返回 ammo / health / null', () => {
+describe('rollDrop 回血补给', () => {
+  it('所有敌人只返回 health / null，不掉落免费 Token 或弹药', () => {
     const rng = mulberry32(7);
-    for (let i = 0; i < 300; i++) {
-      const d = rollDrop(rng, 'brawler');
-      expect(['ammo', 'health', null]).toContain(d);
+    for (const type of Object.keys(ENEMY_TYPES)) for (let i = 0; i < 300; i++) {
+      expect(['health', null]).toContain(rollDrop(rng, type));
     }
   });
-  it('掉落概率在合理区间（10%~45%）', () => {
+  it.each([
+    ['brawler', 0.25], ['knifer', 0.25], ['clubber', 0.3],
+    ['pistol', 0.3], ['rifle', 0.3], ['heavy', 0.6], ['boss', 0.6],
+  ])('%s 保留原回血抽取边界（总概率 %s × 45%%）', (type, chance) => {
+    const miss = vi.fn().mockReturnValue(chance);
+    expect(rollDrop(miss, type)).toBeNull();
+    expect(miss).toHaveBeenCalledOnce();
+    const formerAmmo = vi.fn().mockReturnValueOnce(chance - 0.000001).mockReturnValue(0.549999);
+    expect(rollDrop(formerAmmo, type)).toBeNull();
+    expect(formerAmmo).toHaveBeenCalledTimes(2);
+    const health = vi.fn().mockReturnValueOnce(chance - 0.000001).mockReturnValue(0.55);
+    expect(rollDrop(health, type)).toBe('health');
+    expect(health).toHaveBeenCalledTimes(2);
+  });
+  it('普通需求鸭回血概率约 11.25%，没有把旧弹药概率转给回血', () => {
     const rng = mulberry32(99);
     let drops = 0;
     const n = 4000;
     for (let i = 0; i < n; i++) if (rollDrop(rng, 'brawler')) drops++;
     const rate = drops / n;
-    expect(rate).toBeGreaterThan(0.1);
-    expect(rate).toBeLessThan(0.45);
+    expect(rate).toBeGreaterThan(0.09);
+    expect(rate).toBeLessThan(0.14);
   });
   it('所有敌人类型定义完整', () => {
     for (const key of Object.keys(ENEMY_TYPES)) {
@@ -339,7 +362,7 @@ describe('金币与打工人福利掉落', () => {
       expect(Number.isInteger(item.color)).toBe(true);
       expect(item.label.length).toBeGreaterThan(0);
       expect(item.desc.length).toBeGreaterThan(0);
-      expect(['heal', 'fullheal', 'shield', 'ammo', 'xp', 'haste', 'rage']).toContain(item.effect.kind);
+      expect(['heal', 'fullheal', 'shield', 'xp', 'haste', 'rage']).toContain(item.effect.kind);
       if (['haste', 'rage'].includes(item.effect.kind)) expect(item.effect.duration).toBeGreaterThan(0);
       else if (item.effect.kind !== 'fullheal') expect(item.effect.amount).toBeGreaterThan(0);
       expect(item).not.toHaveProperty('price');
@@ -384,114 +407,109 @@ describe('金币与打工人福利掉落', () => {
   });
 });
 
-describe('AI 模型武器目录', () => {
-  it('只含 4 把枪，Claude 免费，其余保留原有价格', () => {
-    const catalog = gunCatalog();
-    expect(catalog.map((g) => g.id)).toEqual(['claude', 'qwen', 'glm', 'codex']);
-    expect(catalog.map((g) => g.price)).toEqual([0, 320, 400, 620]);
-    for (const entry of catalog) {
-      const gun = GUNS[entry.id];
-      expect(entry.label).toBe(gun.label);
-      expect(entry.tag).toBe(gun.tag);
-      expect(entry.accent).toBe(gun.accent);
-      expect(entry.desc).toContain(String(gun.damage));
-      expect(entry.desc).toContain(String(gun.range));
+describe('五家订阅的战斗配装', () => {
+  it('只从 PLANS 生成五种配装，不保留 Codex 或第二份购枪目录', () => {
+    expect(Object.keys(PLANS)).toEqual(['claude', 'gpt', 'qwen', 'glm', 'ds']);
+    for (const [id, plan] of Object.entries(PLANS)) {
+      expect(computeLoadout(id).gun).toBe(plan);
+      expect(plan.label.length).toBeGreaterThan(0);
+      expect(plan.tag.length).toBeGreaterThan(0);
+      expect(Number.isInteger(plan.accent)).toBe(true);
+      expect(plan).not.toHaveProperty('price');
+    }
+    for (const name of ['GUNS', 'gunCatalog', 'GEAR', 'gearNext', 'shopCatalog']) {
+      expect(rules).not.toHaveProperty(name);
     }
   });
-  it('旧商店与护具规则不再导出', () => {
-    for (const name of ['GEAR', 'gearNext', 'shopCatalog']) expect(rules).not.toHaveProperty(name);
-  });
-  it('默认 Claude 步枪与 WEAPON 战斗数值一致', () => {
-    const loadout = computeLoadout('claude');
-    for (const key of ['damage', 'rpm', 'magSize', 'reloadTime', 'bulletSpeed']) {
-      expect(loadout[key]).toBe(WEAPON[key]);
+  it('默认 DS 调用器与 WEAPON 战斗数值一致，无弹匣/换弹参数', () => {
+    const loadout = computeLoadout();
+    for (const key of ['damage', 'rpm', 'bulletSpeed']) expect(loadout[key]).toBe(WEAPON[key]);
+    expect(loadout.gun).toBe(PLANS.ds);
+    expect(loadout.damage).toBe(34);
+    expect(loadout.range).toBe(42);
+    for (const key of ['magSize', 'reloadTime', 'reserveStart']) {
+      expect(loadout).not.toHaveProperty(key);
+      expect(WEAPON).not.toHaveProperty(key);
+      for (const plan of Object.values(PLANS)) expect(plan).not.toHaveProperty(key);
     }
-    expect(loadout.gun).toBe(GUNS.claude);
   });
-  it('每枪只定义基础武器数值，血量/减伤/移动/散布加成由卡牌负责', () => {
-    for (const id of Object.keys(GUNS)) {
+  it('模型只定义基础战斗数值，血量/减伤/移动/散布加成由卡牌负责', () => {
+    for (const id of Object.keys(PLANS)) {
       expect(computeLoadout(id)).toMatchObject({ maxHp: 100, dmgMul: 1, speedMul: 1, spreadMul: 1 });
     }
-    expect(computeLoadout('missing')).toEqual(computeLoadout('claude'));
-  });
-  it('GLM 多弹丸、Codex 高伤低射速、Qwen 高频大弹匣', () => {
-    const glm = computeLoadout('glm'), codex = computeLoadout('codex');
-    expect(glm.pellets).toBeGreaterThan(1);
-    expect(codex.damage).toBeGreaterThan(glm.damage);
-    expect(codex.rpm).toBeLessThan(computeLoadout('claude').rpm);
-    expect(GUNS.qwen.rpm).toBeGreaterThan(GUNS.claude.rpm);
-    expect(GUNS.qwen.magSize).toBeGreaterThan(GUNS.claude.magSize);
-  });
-});
-
-describe('每枪距离衰减', () => {
-  it('每把枪定义独立衰减参数', () => {
-    for (const g of Object.values(GUNS)) {
-      expect(g.falloffStart).toBeGreaterThan(0);
-      expect(g.falloffEnd).toBeGreaterThan(g.falloffStart);
-      expect(g.falloffMin).toBeGreaterThan(0);
-      expect(g.falloffMin).toBeLessThan(1);
+    for (const id of [undefined, null, 'missing', 'codex', 'toString', 'constructor', '__proto__']) {
+      expect(computeLoadout(id)).toEqual(computeLoadout('ds'));
     }
   });
-  it('重步枪远战保留伤害比例高于卡宾枪', () => {
-    const lr = damageAtDistance(46, 40, GUNS.codex);
-    const cb = damageAtDistance(26, 40, GUNS.claude);
-    expect(lr / 46).toBeGreaterThan(cb / 26);
-    expect(lr / 46).toBeGreaterThanOrEqual(0.7);
-  });
-  it('霰弹枪衰减更快，定位近距爆发', () => {
-    const sg = damageAtDistance(15, 15, GUNS.glm);
-    const cb = damageAtDistance(26, 15, GUNS.claude);
-    expect(sg / 15).toBeLessThan(cb / 26);
-  });
-  it('缺省参数仍用卡宾枪衰减（兼容旧调用）', () => {
-    expect(damageAtDistance(26, 25)).toBeCloseTo(damageAtDistance(26, 25, GUNS.claude), 6);
+  it('Claude 精准高伤、GPT 均衡、Qwen 高频、GLM 多弹丸、DS 低价长射程', () => {
+    expect(computeLoadout('claude')).toMatchObject({ damage: 68, rpm: 420, range: 54 });
+    expect(computeLoadout('gpt')).toMatchObject({ damage: 45, rpm: 600, range: 44 });
+    expect(computeLoadout('qwen')).toMatchObject({ damage: 21, rpm: 780, range: 34 });
+    expect(computeLoadout('glm')).toMatchObject({ damage: 17, rpm: 180, pellets: 5, range: 22 });
+    expect(computeLoadout('ds')).toMatchObject({ damage: 34, rpm: 480, range: 42 });
   });
 });
 
-describe('霰弹枪重做', () => {
-  it('近距爆发：6 弹丸 × 15 伤害，售价下调到 400', () => {
-    const s = GUNS.glm;
-    expect(s.pellets).toBe(6);
-    expect(s.damage).toBe(15);
-    expect(s.price).toBe(400);
-    expect(s.damage * s.pellets).toBeGreaterThanOrEqual(80);
+describe('各订阅模型的距离衰减', () => {
+  it('每种模型定义独立衰减参数', () => {
+    for (const plan of Object.values(PLANS)) {
+      expect(plan.falloffStart).toBeGreaterThan(0);
+      expect(plan.falloffEnd).toBeGreaterThan(plan.falloffStart);
+      expect(plan.falloffMin).toBeGreaterThan(0);
+      expect(plan.falloffMin).toBeLessThan(1);
+    }
+  });
+  it('Claude 远战保留伤害比例高于 Qwen', () => {
+    const precision = damageAtDistance(68, 40, PLANS.claude);
+    const rapid = damageAtDistance(21, 40, PLANS.qwen);
+    expect(precision / 68).toBeGreaterThan(rapid / 21);
+    expect(precision / 68).toBeGreaterThanOrEqual(0.8);
+  });
+  it('GLM 散射衰减更快，定位近距爆发', () => {
+    const scatter = damageAtDistance(17, 15, PLANS.glm);
+    const standard = damageAtDistance(34, 15, PLANS.ds);
+    expect(scatter / 17).toBeLessThan(standard / 34);
+  });
+  it('缺省距离衰减与 DS 默认计划相同', () => {
+    for (const distance of [2, 24, 30, 42, 100]) {
+      expect(damageAtDistance(34, distance)).toBeCloseTo(damageAtDistance(34, distance, PLANS.ds), 6);
+    }
+  });
+});
+
+describe('GLM 散射战斗定位', () => {
+  it('近距爆发：5 弹丸 × 17 伤害，一次调用而非逐弹计费', () => {
+    expect(PLANS.glm.pellets).toBe(5);
+    expect(PLANS.glm.damage).toBe(17);
+    expect(PLANS.glm.tokensPerCall).toBe(32);
+    expect(PLANS.glm.damage * PLANS.glm.pellets).toBe(85);
   });
   it('散布收紧且定义弹丸扩散角', () => {
-    expect(GUNS.glm.spreadBase).toBeLessThanOrEqual(0.04);
-    expect(GUNS.glm.pelletSpread).toBeLessThanOrEqual(0.12);
+    expect(PLANS.glm.spreadBase).toBeLessThanOrEqual(0.04);
+    expect(PLANS.glm.pelletSpread).toBeLessThanOrEqual(0.12);
   });
-  it('持续 DPS 仍低于连发枪（定位区分）', () => {
-    const dps = (g) => g.damage * g.pellets * g.rpm / 60;
-    expect(dps(GUNS.glm)).toBeLessThan(dps(GUNS.qwen));
-  });
-});
-
-describe('低弹药兜底', () => {
-  it('ammoLow 时任何敌人必掉弹药箱', () => {
-    const rng = mulberry32(3);
-    for (const type of Object.keys(ENEMY_TYPES))
-      for (let i = 0; i < 50; i++)
-        expect(rollDrop(rng, type, true)).toBe('ammo');
-  });
-  it('默认行为不变（ammo/health/null）', () => {
-    const rng = mulberry32(7);
-    for (let i = 0; i < 200; i++)
-      expect(['ammo', 'health', null]).toContain(rollDrop(rng, 'brawler'));
+  it('持续 DPS 仍低于 Qwen 连发（定位区分）', () => {
+    const dps = (plan) => plan.damage * plan.pellets * plan.rpm / 60;
+    expect(dps(PLANS.glm)).toBeLessThan(dps(PLANS.qwen));
   });
 });
 
-describe('Game 武器购买与装备', () => {
-  it('开局只持有免费 Claude，没有背包、护具或旧交易方法', () => {
-    const game = makeGameHarness();
-    expect(game.ownedGuns).toEqual(['claude']);
-    expect(game.gunId).toBe('claude');
-    expect(game.p.mag).toBe(GUNS.claude.magSize);
-    expect(game).not.toHaveProperty('gear');
-    expect(game).not.toHaveProperty('inv');
-    for (const name of ['buyGood', 'openShop', 'closeShop', 'sellItem']) expect(typeof game[name]).toBe('undefined');
+describe('Game 订阅面板回归', () => {
+  it('重置仅给启动预算、无订阅，不再保留枪械拥有权或弹药交易后门', () => {
+    const game = makeGameHarness({ subscribed: false });
+    expect(game.planId).toBeNull();
+    expect(game.coins).toBe(STARTING_COINS);
+    expect(game.coinsEarned).toBe(0);
+    expect(game.tokens).toBe(0);
+    for (const key of ['gear', 'inv', 'ownedGuns', 'gunId', 'mags', 'dryT', 'rescued']) {
+      expect(game).not.toHaveProperty(key);
+    }
+    for (const key of ['mag', 'reserve', 'reloadT']) expect(game.p).not.toHaveProperty(key);
+    for (const name of ['buyGood', 'openShop', 'closeShop', 'sellItem', 'buyGun', 'equipGun', 'cycleGun', 'startReload']) {
+      expect(typeof game[name]).toBe('undefined');
+    }
   });
-  it('打开/关闭武器面板清空输入，且不接受从其他菜单打开', () => {
+  it('打开/关闭订阅面板清空输入，且不接受从其他菜单打开', () => {
     const game = makeGameHarness();
     game.keys.add('Space'); game.keys.add('KeyW'); game.mouse.down = true; game.mouseFire = true;
     game.openWeapons();
@@ -508,7 +526,7 @@ describe('Game 武器购买与装备', () => {
     game.state = 'card'; game.openWeapons();
     expect(game.state).toBe('card');
   });
-  it('武器面板打开时不推进战斗时间、移动、敌人、子弹或拾取', () => {
+  it('订阅面板打开时不推进战斗时间、移动、敌人、子弹或拾取', () => {
     const game = makeGameHarness();
     vi.spyOn(game, 'pollGamepad').mockImplementation(() => {});
     const combat = ['updatePlayer', 'updateWaves', 'updateEnemies', 'updateBullets', 'updatePickups', 'updateOrbit'];
@@ -517,86 +535,16 @@ describe('Game 武器购买与装备', () => {
     expect(game.time).toBe(0);
     for (const method of combat) expect(game[method]).not.toHaveBeenCalled();
   });
-  it.each(['playing', 'paused', 'card', 'cardbook', 'title', 'over'])('%s 状态不能直接调用 buyGun 购买', (state) => {
-    const game = makeGameHarness(); game.state = state; game.coins = 1000;
-    game.buyGun('glm');
-    expect(game.coins).toBe(1000);
-    expect(game.ownedGuns).toEqual(['claude']);
-    expect(game.gunId).toBe('claude');
-  });
-  it('购买 GLM 只扣一次价格，立即装备且不消耗共享备弹', () => {
-    const game = makeGameHarness(); game.openWeapons(); game.coins = 1000;
-    const reserve = game.p.reserve;
-    game.buyGun('glm');
-    expect(game.coins).toBe(600);
-    expect(game.ownedGuns).toEqual(['claude', 'glm']);
-    expect(game.gunId).toBe('glm');
-    expect(game.p.mag).toBe(6);
-    expect(game.loadout.pellets).toBe(6);
-    expect(game.p.reserve).toBe(reserve);
-    expect(game.rebuildPlayerDuck).toHaveBeenCalledOnce();
-    expect(game.hud.renderWeapons).toHaveBeenLastCalledWith(game);
-  });
-  it('金币不足或未知/旧商品 id 不改变金币、持枪与弹匣', () => {
-    const game = makeGameHarness(); game.openWeapons(); game.coins = GUNS.glm.price - 1;
-    game.p.mag = 7;
-    for (const id of ['glm', 'ammo', 'armor', 'helmet', 'shoes', 'gloves', 'missing']) game.buyGun(id);
-    expect(game.coins).toBe(GUNS.glm.price - 1);
-    expect(game.ownedGuns).toEqual(['claude']);
-    expect(game.gunId).toBe('claude');
-    expect(game.p.mag).toBe(7);
-    expect(game.rebuildPlayerDuck).not.toHaveBeenCalled();
-  });
-  it('重复购买免费装备，不重复持有、不补满已消耗弹匣', () => {
-    const game = makeGameHarness(); game.openWeapons(); game.coins = GUNS.glm.price;
-    game.buyGun('glm'); game.p.mag = 2;
-    game.buyGun('claude'); game.p.mag = 7;
-    game.buyGun('glm'); game.buyGun('glm');
-    expect(game.coins).toBe(0);
-    expect(game.ownedGuns).toEqual(['claude', 'glm']);
-    expect(game.gunId).toBe('glm');
-    expect(game.p.mag).toBe(2);
-    expect(game.mags.claude).toBe(7);
-  });
-  it.each(['qwen', 'glm', 'codex'])('新购 %s 只计算一次配装，第一弹匣立即包含卡牌加成', (id) => {
-    const game = makeGameHarness(); game.openWeapons(); game.coins = 2000;
-    game.cards = { c_mag: 2 }; game.recomputeLoadout();
-    const compute = vi.spyOn(rules, 'computeLoadout');
-    try {
-      game.buyGun(id);
-      expect(compute).toHaveBeenCalledExactlyOnceWith(id);
-      expect(game.p.mag).toBe(Math.round(GUNS[id].magSize * 1.5));
-      expect(game.p.mag).toBe(game.loadout.magSize);
-      expect(game.mags[id]).toBe(game.p.mag);
-    } finally {
-      compute.mockRestore();
-    }
-  });
-  it('切枪只遍历已购武器，菜单里不切枪，弹匣各自保存', () => {
-    const game = makeGameHarness(); game.openWeapons(); game.coins = 1000;
-    game.buyGun('glm'); game.p.mag = 3;
-    game.cycleGun(1);
-    expect(game.gunId).toBe('glm');
-    game.closeWeapons(); game.cycleGun(1);
-    expect(game.gunId).toBe('claude');
-    game.p.mag = 8; game.p.reloadT = 0.4; game.cycleGun(-1);
-    expect(game.gunId).toBe('glm');
-    expect(game.p.mag).toBe(3);
-    expect(game.p.reloadT).toBe(0);
-    game.equipGun('codex');
-    expect(game.gunId).toBe('glm');
-    expect(game.mags.claude).toBe(8);
-  });
 });
 
 describe('Game 福利即时结算', () => {
   it.each([
     ['subsidy', 'hp', 20], ['welfare', 'shield', 20], ['salary', 'hp', 35], ['coffee', 'hasteT', 5],
-    ['overtime', 'reserve', 16], ['performance', 'xpEarned', 30], ['bonus', 'rageT', 4],
+    ['overtime', 'xpEarned', 12], ['performance', 'xpEarned', 30], ['bonus', 'rageT', 4],
     ['yearbonus', 'hp', 70], ['stock', 'hp', 100],
   ])('拾取 %s 同时结算金币与 %s 效果，且只结算一次', (id, field, expected) => {
     const game = makeGameHarness(); const item = LOOT_ITEMS.find((i) => i.id === id);
-    game.p.hp = 10; game.p.reserve = 0; game.coins = 5; game.coinsEarned = 7;
+    game.p.hp = 10; game.coins = 5; game.coinsEarned = 7;
     const mesh = queuePickup(game, 'loot', id);
     game.updatePickups(0.016); game.updatePickups(0.016);
     expect(game.coins).toBe(5 + item.coins);
@@ -609,24 +557,25 @@ describe('Game 福利即时结算', () => {
     expect(game).not.toHaveProperty('inv');
   });
   it('过期或远离玩家的福利不提前结算', () => {
-    const game = makeGameHarness();
+    const game = makeGameHarness(), before = game.coins;
     queuePickup(game, 'loot', 'stock', { distance: 10 });
     queuePickup(game, 'loot', 'stock', { life: 0.001 });
     game.updatePickups(0.016);
-    expect(game.coins).toBe(0);
+    expect(game.coins).toBe(before);
     expect(game.coinsEarned).toBe(0);
     expect(game.pickups).toHaveLength(1);
     expect(game.audio.pickup).not.toHaveBeenCalled();
   });
-  it('绩效经验应用经验卡倍率，弹药福利不吃弹药箱卡倍率', () => {
+  it('绩效与加班费经验均应用经验卡倍率，不改变 Token 额度', () => {
     const game = makeGameHarness(); game.cards = { c_xp: 2, c_ammo: 3 }; game.recomputeLoadout();
-    game.p.reserve = 0;
+    const tokens = game.tokens, coins = game.coins;
     queuePickup(game, 'loot', 'performance'); queuePickup(game, 'loot', 'overtime');
     game.updatePickups(0.016);
-    expect(game.xpEarned).toBe(45);
-    expect(game.p.reserve).toBe(16);
-    queuePickup(game, 'ammo'); game.updatePickups(0.016);
-    expect(game.p.reserve).toBe(16 + Math.round(48 * game.loadout.ammoPickupMul));
+    expect(game.xpEarned).toBe(45 + 18);
+    expect(game.coins).toBe(coins + 24 + 18);
+    expect(game.coinsEarned).toBe(42);
+    expect(game.tokens).toBe(tokens);
+    expect(game.p).not.toHaveProperty('reserve');
   });
   it('普通回血/满血福利均钳在生命上限，fragile 仍为 1 HP', () => {
     const game = makeGameHarness(); game.p.hp = 98;
@@ -924,10 +873,27 @@ describe('cardEffects 数值叠加', () => {
   });
   it('递减类卡有上限，不会减到 0 或负数', () => {
     const ef = cardEffects({ c_reload: 3, c_dash: 3, c_armor: 3, c_spread: 3 });
-    for (const v of [ef.reloadMul, ef.dashCdMul, ef.armorMul, ef.spreadMul]) {
+    for (const v of [ef.tokenCostMul, ef.dashCdMul, ef.armorMul, ef.spreadMul]) {
       expect(v).toBeGreaterThan(0.4);
       expect(v).toBeLessThan(1);
     }
+  });
+  it('四张原弹药卡改为 Token/额度/预算/返现，稀有度与层数保留', () => {
+    const expected = [
+      ['c_reload', 'Token 优化', 'common', 3], ['c_mag', '扩展配额', 'common', 3],
+      ['c_ammo', '预算补贴', 'common', 3], ['r_ammoBack', '消费返现', 'rare', 2],
+    ];
+    for (const [id, name, rarity, max] of expected) {
+      expect(CARD_BY_ID[id]).toMatchObject({ name, rarity, max });
+      expect(CARD_BY_ID[id].desc(1)).not.toMatch(/弹药|备弹|弹匣|换弹/);
+    }
+    const ef = cardEffects({ c_reload: 3, c_mag: 2, c_ammo: 2, r_ammoBack: 2 });
+    expect(ef.tokenCostMul).toBeCloseTo(0.7);
+    expect(ef.quotaMul).toBeCloseTo(1.5);
+    expect(ef.meteredCostMul).toBeCloseTo(0.8);
+    expect(ef.mods.cashback).toBeCloseTo(0.5);
+    for (const key of ['reloadMul', 'magMul', 'ammoPickupMul']) expect(ef).not.toHaveProperty(key);
+    expect(ef.mods).not.toHaveProperty('ammoBack');
   });
   it('稀有卡启用对应特效并随层增强', () => {
     const one = cardEffects({ r_explosive: 1, r_crit: 1, r_frost: 1 }).mods;
@@ -1012,7 +978,7 @@ describe('skillsForLevel 技能随等级解锁', () => {
   });
 });
 
-describe('applyCards 与模型枪合成', () => {
+describe('applyCards 与订阅模型配装合成', () => {
   it('把卡牌加成并入 computeLoadout 结果', () => {
     const base = computeLoadout('claude');
     const merged = applyCards(base, cardEffects({ c_dmg: 3, c_hp: 3, c_speed: 3, c_dash: 2 }));
@@ -1021,20 +987,24 @@ describe('applyCards 与模型枪合成', () => {
     expect(merged.speedMul).toBeCloseTo(base.speedMul * 1.24);
     expect(merged.dashCdMul).toBeCloseTo(0.68);
   });
-  it.each(Object.keys(GUNS))('卡牌与 %s 的基础属性叠乘，替代旧护具成长', (id) => {
+  it.each(Object.keys(PLANS))('卡牌与 %s 的基础属性叠乘，Token 优化不再生成换弹参数', (id) => {
     const base = computeLoadout(id);
     const merged = applyCards(base, cardEffects({ c_hp: 3, c_speed: 3, c_armor: 2, c_reload: 2, c_spread: 2 }));
     expect(merged.maxHp).toBe(base.maxHp + 75);
     expect(merged.speedMul).toBeCloseTo(base.speedMul * 1.24);
     expect(merged.dmgMul).toBeCloseTo(base.dmgMul * 0.78);
-    expect(merged.reloadTime).toBeCloseTo(base.reloadTime * 0.67);
+    expect(merged.tokenCostMul).toBeCloseTo(0.8);
     expect(merged.spreadMul).toBeCloseTo(base.spreadMul * 0.62);
+    expect(merged).not.toHaveProperty('reloadTime');
   });
-  it('射速/弹匣卡改写实际武器参数', () => {
-    const base = computeLoadout('claude');
-    const merged = applyCards(base, cardEffects({ c_rate: 2, c_mag: 2 }));
+  it('射速卡改写 rpm，配额与补贴卡只组合经济倍率', () => {
+    const base = computeLoadout('ds');
+    const merged = applyCards(base, cardEffects({ c_rate: 2, c_mag: 2, c_ammo: 2 }));
     expect(merged.rpm).toBeCloseTo(base.rpm * 1.24);
-    expect(merged.magSize).toBe(Math.round(base.magSize * 1.5));
+    expect(merged.quotaMul).toBeCloseTo(1.5);
+    expect(merged.meteredCostMul).toBeCloseTo(0.8);
+    expect(merged).not.toHaveProperty('magSize');
+    expect(base).toEqual(computeLoadout('ds'));
   });
   it('射程卡同步后移衰减区间，远处伤害确实提高', () => {
     const base = computeLoadout('claude');
@@ -1123,21 +1093,22 @@ describe('准星落点预测', () => {
   });
 });
 
-describe('枪支射程', () => {
-  it('每把枪都有正射程且各不相同', () => {
-    const ranges = Object.values(GUNS).map((g) => g.range);
-    for (const r of ranges) expect(r).toBeGreaterThan(0);
+describe('订阅模型射程', () => {
+  it('五种调用器都有正射程且各不相同', () => {
+    const ranges = Object.values(PLANS).map((plan) => plan.range);
+    for (const range of ranges) expect(range).toBeGreaterThan(0);
     expect(new Set(ranges).size).toBe(ranges.length);
-    expect(GUNS.glm.range).toBeLessThan(GUNS.claude.range);
-    expect(GUNS.claude.range).toBeLessThan(GUNS.codex.range);
+    expect(PLANS.glm.range).toBeLessThan(PLANS.qwen.range);
+    expect(PLANS.qwen.range).toBeLessThan(PLANS.ds.range);
+    expect(PLANS.ds.range).toBeLessThan(PLANS.gpt.range);
+    expect(PLANS.gpt.range).toBeLessThan(PLANS.claude.range);
   });
 
-  it('computeLoadout 暴露枪支射程', () => {
-    expect(computeLoadout('glm').range).toBe(GUNS.glm.range);
-    expect(computeLoadout('codex').range).toBe(GUNS.codex.range);
+  it('computeLoadout 暴露计划表中的射程', () => {
+    for (const [id, plan] of Object.entries(PLANS)) expect(computeLoadout(id).range).toBe(plan.range);
   });
 
   it('射程不短于伤害衰减末端（衰减区间内仍有伤害）', () => {
-    for (const g of Object.values(GUNS)) expect(g.range).toBeGreaterThanOrEqual(g.falloffEnd);
+    for (const plan of Object.values(PLANS)) expect(plan.range).toBeGreaterThanOrEqual(plan.falloffEnd);
   });
 });

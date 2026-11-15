@@ -1,6 +1,14 @@
-import { gunCatalog, GUNS, CARD_BY_ID, CARD_RARITIES, SKILLS } from './rules.js';
+import { CARD_BY_ID, CARD_RARITIES, SKILLS } from './rules.js';
+import {
+  PLANS, getPlan, quoteUsage, quoteSubscription, formatCoins, microsToCoins, STARTING_COINS,
+  PROTECTION_ITEMS, banChance,
+} from './subscriptions.js';
 
 const $ = (id) => document.getElementById(id);
+const count = (n) => Number(n).toLocaleString('zh-CN');
+const riskFormatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 6 });
+const riskText = (chance) => riskFormatter.format(chance);
+const hex = (color) => '#' + color.toString(16).padStart(6, '0');
 
 // 自绘枪械轮廓；颜色呼应枪身与曳光，不使用任何厂商标志。
 function weaponIcon(id) {
@@ -8,7 +16,7 @@ function weaponIcon(id) {
   c.width = 64; c.height = 64;
   c.setAttribute('aria-hidden', 'true');
   const x = c.getContext('2d');
-  const accent = '#' + (GUNS[id]?.accent ?? 0xd97757).toString(16).padStart(6, '0');
+  const accent = hex((getPlan(id) || PLANS.ds).accent);
   const box = (bx, by, w, h, col) => { x.fillStyle = col; x.fillRect(bx, by, w, h); };
   const poly = (pts, col) => {
     x.fillStyle = col; x.beginPath(); x.moveTo(...pts[0]);
@@ -24,15 +32,20 @@ function weaponIcon(id) {
     box(49, 24, 8, 14, dark);
   } else {
     box(15, 26, id === 'qwen' ? 28 : 31, 11, dark);
-    box(43, 29, id === 'codex' ? 19 : 15, 4, metal);
+    box(43, 29, 15, 4, metal);
     box(18, 27, id === 'qwen' ? 22 : 16, 7, accent);
-    poly([[24, 37], [32, 37], [30, id === 'qwen' ? 52 : 47], [22, id === 'qwen' ? 52 : 47]], metal);
-    box(34, 36, 4, 7, dark);
-    if (id === 'codex') {
-      box(25, 19, 20, 6, dark); box(26, 20, 4, 4, accent);
-      box(32, 24, 4, 3, metal); box(45, 30, 13, 2, accent);
+    box(22, 36, 17, 4, accent); // 固定调用核心，不画弹匣。
+    poly([[16, 37], [21, 37], [20, 45], [16, 45]], dark);
+    if (id === 'gpt') {
+      box(19, 22, 24, 3, accent); box(20, 20, 22, 2, metal);
+      x.strokeStyle = metal; x.lineWidth = 2;
+      x.beginPath(); x.arc(23, 20, 4, 0, Math.PI * 2); x.stroke();
+      box(43, 26, 3, 10, accent);
+    } else if (id === 'ds') {
+      box(40, 26, 10, 10, accent); box(19, 23, 21, 3, accent);
+      box(24, 28, 11, 2, metal); box(45, 28, 5, 5, dark);
     } else if (id === 'qwen') {
-      box(36, 28, 2, 5, metal); box(40, 28, 2, 5, metal);
+      for (let i = 0; i < 3; i++) box(32 + i * 4, 27, 2, 8, metal);
       box(20, 23, 18, 2, metal);
     } else {
       box(30, 22, 3, 4, metal); box(42, 26, 3, 10, accent);
@@ -47,8 +60,9 @@ export class HUD {
       hud: $('hud'), hpFill: $('hpFill'), hpText: $('hpText'), dashFill: $('dashFill'),
       statWave: $('statWave'), statKills: $('statKills'), statScore: $('statScore'), statTime: $('statTime'),
       waveBanner: $('waveBanner'), waveTitle: $('waveTitle'), waveTip: $('waveTip'),
-      mag: $('mag'), reserve: $('reserve'), reloadHint: $('reloadHint'),
-      reloadBar: $('reloadBar'), reloadFill: $('reloadFill'), weaponName: $('weaponName'), gunIcon: $('gunIcon'),
+      tokensRemaining: $('tokensRemaining'), tokensGranted: $('tokensGranted'),
+      subscriptionStatus: $('subscriptionStatus'), usageHint: $('usageHint'), banRisk: $('banRisk'),
+      protectionCounts: $('protectionCounts'), weaponName: $('weaponName'), gunIcon: $('gunIcon'),
       killfeed: $('killfeed'), toast: $('toast'), alert: $('alertBanner'),
       crosshair: $('crosshair'), hitmarker: $('hitmarker'),
       dmg: $('dmgVignette'), low: $('lowVignette'), flash: $('flash'),
@@ -56,7 +70,9 @@ export class HUD {
       resWave: $('resWave'), resKills: $('resKills'), resScore: $('resScore'), resAcc: $('resAcc'),
       fps: $('fps'), loading: $('loading'),
       statCoins: $('statCoins'), weapons: $('weaponScreen'), weaponCoins: $('weaponCoins'),
-      weaponGrid: $('weaponGrid'),
+      weaponGrid: $('weaponGrid'), weaponIntro: $('weaponIntro'), weaponStatus: $('weaponStatus'),
+      weaponRisk: $('weaponRisk'), weaponProtections: $('weaponProtections'), weaponReferences: $('weaponReferences'),
+      overTitle: $('overTitle'), overSub: $('overSub'), overReason: $('overReason'), resCalls: $('resCalls'), resTokensUsed: $('resTokensUsed'),
       statRemain: $('statRemain'), resTime: $('resTime'), resCoins: $('resCoins'),
       resBest: $('resBest'), recordBadge: $('recordBadge'),
       levelBadge: $('levelBadge'), xpFill: $('xpFill'), xpText: $('xpText'), cardChip: $('cardChip'),
@@ -76,6 +92,7 @@ export class HUD {
     this._alertT = null;
     this._hitT = null;
     this._dmgT = null;
+    this._protectionRefs = new Map();
     this.cross = { x: innerWidth / 2, y: innerHeight / 2 };
   }
 
@@ -92,15 +109,55 @@ export class HUD {
 
   dash(t) { this.el.dashFill.style.width = Math.min(1, Math.max(0, t)) * 100 + '%'; }
 
-  ammo(mag, reserve, reloadT, reloadTotal) {
-    this.el.mag.textContent = mag;
-    this.el.mag.classList.toggle('empty', mag === 0);
-    this.el.mag.classList.toggle('low', mag > 0 && mag <= 6);
-    this.el.reserve.textContent = reserve;
-    const reloading = reloadT > 0;
-    this.el.reloadBar.classList.toggle('on', reloading);
-    this.el.reloadFill.style.width = reloading ? ((1 - reloadT / reloadTotal) * 100) + '%' : '0%';
-    this.el.reloadHint.textContent = reloading ? '换弹中…' : mag === 0 ? (reserve > 0 ? '按 R 换弹！' : '弹药耗尽！拾取弹药箱') : '';
+  subscription(game) {
+    const plan = getPlan(game.planId);
+    const quote = game.usageQuote();
+    const metered = !!plan && (game.subscriptionStatus === 'metered' || game.tokens === 0);
+    this.el.tokensRemaining.textContent = count(game.tokens);
+    this.el.tokensGranted.textContent = count(game.quotaGranted);
+    this.el.subscriptionStatus.textContent = !plan ? '等待选择' : game.subscriptionStatus === 'metered'
+      ? '未续费 · 按量' : metered ? '额度用尽 · 按量' : '额度优先';
+    this.el.subscriptionStatus.dataset.status = !plan ? 'none' : metered ? 'metered' : 'active';
+    this.el.tokensRemaining.classList.toggle('empty', !!plan && game.tokens === 0);
+    this.el.usageHint.classList.toggle('blocked', !!quote && quote.costMicros > game.walletMicros);
+    this.el.usageHint.textContent = !quote ? '选择订阅后开始 · 主动技能不耗 Token' : quote.costMicros > game.walletMicros
+      ? `余额不足一次调用 · ${count(quote.tokens)} Token / 次；移动、技能和拾取仍可用`
+      : `${count(quote.tokens)} Token / 次 · ${quote.costMicros ? `下次 ${formatCoins(microsToCoins(quote.costMicros))} 金币${quote.includedTokens ? '（部分按量）' : '（按量）'}` : '消耗本波额度'}`;
+    const risk = game.currentBanChance();
+    this.el.banRisk.textContent = `虚构封号风险 ${riskText(risk)} / 次调用`;
+    this.el.banRisk.classList.toggle('hasRisk', risk > 0);
+    this.renderProtections(this.el.protectionCounts, game.protections);
+  }
+
+  renderProtections(container, protections = {}) {
+    if (!container) return;
+    let refs = this._protectionRefs.get(container);
+    if (!refs) {
+      refs = PROTECTION_ITEMS.map((item) => {
+        const chip = document.createElement('span');
+        chip.className = 'protectionChip';
+        chip.dataset.protection = item.id;
+        chip.title = `${item.label} · 虚构游戏道具，整局叠加保留`;
+        const icon = document.createElement('i');
+        icon.className = 'protectionIcon'; icon.textContent = item.icon;
+        icon.style.setProperty('--protection-color', hex(item.color));
+        icon.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.className = 'protectionLabel'; label.textContent = item.label;
+        const amount = document.createElement('b');
+        amount.className = 'protectionCount';
+        chip.append(icon, label, amount);
+        container.appendChild(chip);
+        return { id: item.id, chip, amount };
+      });
+      this._protectionRefs.set(container, refs);
+    }
+    for (const ref of refs) {
+      const n = Number.isSafeInteger(protections?.[ref.id]) && protections[ref.id] > 0 ? protections[ref.id] : 0;
+      const text = `×${count(n)}`;
+      if (ref.amount.textContent !== text) ref.amount.textContent = text;
+      ref.chip.classList.toggle('held', n > 0);
+    }
   }
 
   stats(wave, kills, score, time) {
@@ -111,7 +168,7 @@ export class HUD {
     this.el.statTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
   }
 
-  coins(v) { this.el.statCoins.textContent = v; }
+  coins(v) { this.el.statCoins.textContent = formatCoins(v); }
 
   remain(v) { this.el.statRemain.textContent = v; }
 
@@ -128,13 +185,13 @@ export class HUD {
     setTimeout(() => d.remove(), 1450);
   }
 
-  setWeapon(label, gunId) {
+  setWeapon(label, planId) {
     if (this.el.weaponName.textContent !== label) this.el.weaponName.textContent = label;
-    if (gunId && this._gunIconId !== gunId) {
-      this._gunIconId = gunId;
+    if (planId && this._gunIconId !== planId) {
+      this._gunIconId = planId;
       const x = this.el.gunIcon.getContext('2d');
       x.clearRect(0, 0, 64, 64);
-      x.drawImage(weaponIcon(gunId), 0, 0);
+      x.drawImage(weaponIcon(planId), 0, 0);
     }
   }
 
@@ -354,58 +411,130 @@ export class HUD {
   }
 
   weaponsOpen(on) {
-    this.el.weapons.classList.toggle('hidden', !on);
-    this.el.weapons.inert = !on;
+    const panel = this.el.weapons;
+    if (on && panel.classList.contains('hidden')) {
+      this._weaponReturnFocus = document.activeElement;
+      this._weaponNeedsFocus = true;
+    }
+    panel.classList.toggle('hidden', !on);
+    panel.inert = !on;
     if (on) this.el.crosshair.style.display = 'none';
-    else if (this.el.weapons.contains(document.activeElement)) document.activeElement.blur();
+    else {
+      this._weaponNeedsFocus = false;
+      if (panel.contains(document.activeElement)) document.activeElement.blur();
+      const target = this._weaponReturnFocus;
+      if (target?.isConnected && target !== document.body && !target.closest('[inert], .hidden')) target.focus({ preventScroll: true });
+      this._weaponReturnFocus = null;
+    }
   }
 
   renderWeapons(game) {
-    this.el.weaponCoins.textContent = game.coins;
-    // 购买后仍聚焦同一把枪，键盘与手柄可连续操作；首次打开聚焦当前装备。
-    const focused = document.activeElement?.closest('.weaponCard')?.dataset.gun;
+    const plan = getPlan(game.planId);
+    const sub = game.subscription;
+    const nextWave = Math.max(1, game.wave + (game.waveState === 'inter' ? 1 : 0));
+    this.el.weaponCoins.textContent = formatCoins(game.coins);
+    $('weaponClose').textContent = plan ? '返回战斗 (B / Esc)' : '回到标题 (Esc)';
+    this.el.weaponIntro.textContent = !plan
+      ? `${formatCoins(STARTING_COINS)} 金币启动预算已备好。先手动确认一项订阅，再开始守卫；当前仅聚焦 DS，尚未扣款。`
+      : game.waveState === 'inter'
+        ? `波间休整 · 切换立即预付第 ${nextWave} 波，额度立即可用；该波开始不再重复收费或发放。`
+        : '工资变成调用预算。切换只在此面板明确确认，战斗中没有免费切换快捷键。';
+    this.el.weaponStatus.textContent = !plan ? '尚未订阅 · 选择期间战斗冻结，Esc 可返回标题'
+      : `${plan.label} · 剩余 ${count(game.tokens)} / 本次发放 ${count(game.quotaGranted)} Token · ${game.subscriptionStatus === 'metered'
+        ? `第 ${sub.processedWave} 波未续费，按量计费；本波不自动重扣`
+        : `已支付第 ${sub.paidWave} 波${sub.paidWave > game.wave ? '（已预付）' : ''}`}`;
+    this.el.weaponStatus.classList.toggle('metered', game.subscriptionStatus === 'metered');
+    this.el.weaponRisk.textContent = plan
+      ? `当前虚构封号风险 ${riskText(game.currentBanChance())} / 成功付费调用；道具整局叠加保留，不能消除 Claude / GPT 的风险。`
+      : '封号概率仅为虚构游戏平衡值，不是任何真实平台的规则或统计。';
+    this.renderProtections(this.el.weaponProtections, game.protections);
+
+    // 付费后仍聚焦同一卡；首次开局只聚焦 DS，绝不自动订阅。
+    const focused = document.activeElement?.closest('.weaponCard')?.dataset.plan;
     const grid = this.el.weaponGrid;
     grid.textContent = '';
-    for (const good of gunCatalog()) {
-      const gun = GUNS[good.id];
-      const owned = game.ownedGuns.includes(good.id);
-      const equipped = game.gunId === good.id;
-      const affordable = owned || game.coins >= good.price;
+    const put = (cls, text, tag = 'span') => {
+      const el = document.createElement(tag);
+      el.className = cls; el.textContent = text;
+      return el;
+    };
+    for (const candidate of Object.values(PLANS)) {
+      const subscription = quoteSubscription(candidate.id, game.loadout);
+      const usage = quoteUsage(candidate.id, 0, game.loadout);
+      const equipped = game.planId === candidate.id;
+      const affordable = subscription.feeMicros <= game.walletMicros;
+      const rate = formatCoins(microsToCoins(usage.rateMicros * 1000));
+      const risk = riskText(banChance(candidate.id, game.protections));
+      const action = equipped ? '当前订阅 · 不重复扣款' : affordable ? (plan ? '付费切换' : '确认订阅')
+        : `还差 ${formatCoins(microsToCoins(subscription.feeMicros - game.walletMicros))} 金币`;
       const tile = document.createElement('button');
       tile.type = 'button';
-      tile.className = `weaponCard${equipped ? ' equipped' : ''}${!affordable ? ' cant' : ''}`;
-      tile.dataset.gun = good.id;
-      tile.style.setProperty('--gun-accent', '#' + good.accent.toString(16).padStart(6, '0'));
+      tile.className = `weaponCard${equipped ? ' equipped' : ''}${!affordable && !equipped ? ' cant' : ''}`;
+      tile.dataset.plan = candidate.id;
+      tile.style.setProperty('--gun-accent', hex(candidate.accent));
       tile.setAttribute('aria-pressed', String(equipped));
       tile.setAttribute('aria-disabled', String(!affordable || equipped));
-      const put = (cls, text, tag = 'span') => {
-        const el = document.createElement(tag);
-        el.className = cls; el.textContent = text;
-        return el;
-      };
+      tile.setAttribute('aria-label', `${candidate.label}，每波 ${formatCoins(candidate.fee)} 金币，发放 ${count(subscription.quota)} Token，每次调用 ${count(usage.tokens)} Token，超额每千 Token ${rate} 金币，虚构封号风险 ${risk} 每次调用。${action}`);
       const art = put('weaponArt', '');
-      art.appendChild(weaponIcon(good.id));
+      art.appendChild(weaponIcon(candidate.id));
       const stats = put('weaponStats', '');
       for (const [label, value] of [
-        ['伤害', gun.pellets > 1 ? `${gun.damage} × ${gun.pellets}` : gun.damage],
-        ['射速', `${gun.rpm}/分`], ['弹匣', gun.magSize], ['射程', `${gun.range}m`],
+        ['每波额度', `${count(subscription.quota)} Token`],
+        ['每次调用', `${count(usage.tokens)} Token`],
+        ['超额 / 千 Token', `${rate} 金币`],
+        ['虚构封号 / 次', risk],
       ]) {
         const row = put('', '');
         row.append(put('', label), put('', value, 'b'));
         stats.appendChild(row);
       }
-      const foot = put('weaponFoot', '');
-      foot.append(
-        put('weaponPrice', owned ? '已拥有' : `${good.price} 金币`),
-        put('weaponAction', equipped ? '已装备' : owned ? '装备' : affordable ? '购买' : `差 ${good.price - game.coins} 金币`),
+      const combat = put('weaponCombat', `伤害 ${candidate.damage}${candidate.pellets > 1 ? ` × ${candidate.pellets}` : ''} · ${candidate.rpm}/分 · ${candidate.range}m`);
+      const reference = put('weaponReference', '');
+      reference.append(
+        put('weaponIndex', `AA 指数 ${candidate.reference.score} · ${candidate.reference.effort}`),
+        put('weaponModel', candidate.reference.model),
+        put('weaponDate', `参考日期 ${candidate.reference.date}`),
       );
-      tile.append(art, put('weaponName', good.label, 'b'), put('weaponTag', good.tag), stats, foot);
-      // 使用 button 原生回车/空格激活，不额外绑定 keydown，避免一次按键重复购买。
-      tile.addEventListener('click', () => game.buyGun(good.id));
+      const foot = put('weaponFoot', '');
+      foot.append(put('weaponPrice', `${formatCoins(candidate.fee)} 金币 / 波`), put('weaponAction', action));
+      tile.append(art, put('weaponName', candidate.label, 'b'), put('weaponTag', candidate.tag), stats, combat, reference, foot);
+      // 不绑定 keydown：只用 button 原生 Space/Enter，避免一次确认重复扣款。
+      tile.addEventListener('click', () => game.subscribe(candidate.id));
       tile.addEventListener('mouseenter', () => game.audio.uiHover());
       grid.appendChild(tile);
     }
-    grid.querySelector(`[data-gun="${focused || game.gunId}"]`)?.focus({ preventScroll: true });
+    this.renderReferences();
+    if ((this._weaponNeedsFocus || focused) && !this.el.weapons.inert) {
+      const target = grid.querySelector(`[data-plan="${focused || game.planId || 'ds'}"]`);
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    this._weaponNeedsFocus = false;
+  }
+
+  renderReferences() {
+    const details = this.el.weaponReferences;
+    if (details.childElementCount) return;
+    const summary = document.createElement('summary');
+    summary.textContent = '静态参考、口径与换算';
+    const note = document.createElement('p');
+    note.textContent = '真实 API 价格仅作静态参考（美元 / 百万 Token，非缓存输入；地区、上下文及峰谷限定见各项）。游戏金币按 1:3 输入 / 输出混合价映射，订阅约比同量按量优惠 25%；不是现实聊天会员套餐。AA 指数不是百分制，也不等于武器能力的线性倍数。';
+    details.append(summary, note);
+    const list = document.createElement('ul');
+    for (const plan of Object.values(PLANS)) {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = plan.reference.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.textContent = `${plan.label} 定价来源`;
+      const description = document.createElement('span');
+      description.textContent = ` · ${plan.reference.model} · 输入 $${plan.reference.inputUsd} / 输出 $${plan.reference.outputUsd} · ${plan.reference.scope} · ${plan.reference.date}`;
+      row.append(link, description);
+      list.appendChild(row);
+    }
+    const capability = document.createElement('a');
+    capability.href = PLANS.ds.reference.capabilityUrl; capability.target = '_blank'; capability.rel = 'noopener noreferrer';
+    capability.textContent = `Artificial Analysis 同口径能力参考 · ${PLANS.ds.reference.date}`;
+    details.append(list, capability);
   }
 
   banner(wave, tip) {
@@ -479,6 +608,7 @@ export class HUD {
   }
 
   screen(name) {
+    const enteringResults = name === 'over' && this.el.over.classList.contains('hidden');
     this.el.start.classList.toggle('hidden', name !== 'start');
     this.el.pause.classList.toggle('hidden', name !== 'pause');
     this.el.over.classList.toggle('hidden', name !== 'over');
@@ -487,21 +617,35 @@ export class HUD {
     this.el.cardBook.classList.add('hidden');
     for (const [id, el] of [['start', this.el.start], ['pause', this.el.pause], ['over', this.el.over]]) el.inert = name !== id;
     this.el.weapons.inert = this.el.card.inert = this.el.cardBook.inert = true;
-    // 切回战斗/标题时清掉覆盖层按钮焦点，防止空格原生激活隐藏按钮
-    if (name === null || name === 'start') {
-      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-    }
+    this._weaponNeedsFocus = false;
+    // 隐藏层保持 inert；离开开局选择时返回可见的标题按钮，不遗留不可见焦点。
+    if (document.activeElement?.closest('.overlay.hidden')) document.activeElement.blur();
+    if (name === null && document.activeElement !== document.body) document.activeElement?.blur();
+    if (name === 'start') $('startBtn').focus({ preventScroll: true });
+    else if (name === 'pause') $('resumeBtn').focus({ preventScroll: true });
+    else if (enteringResults) $('retryBtn').focus({ preventScroll: true });
   }
 
-  results({ wave, kills, score, acc, time = 0, coins = 0, best = 0, isRecord = false }) {
+  results({ wave, kills, score, acc, time = 0, coins = 0, best = 0, isRecord = false, reason = 'combat', provider, providerLabel, calls = 0, tokensUsed = 0 }) {
     this.el.resWave.textContent = wave;
     this.el.resKills.textContent = kills;
     this.el.resScore.textContent = score;
     this.el.resAcc.textContent = Math.round(acc * 100) + '%';
     const m = Math.floor(time / 60), s = Math.floor(time % 60);
     this.el.resTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
-    this.el.resCoins.textContent = coins;
+    this.el.resCoins.textContent = formatCoins(coins);
     this.el.resBest.textContent = best;
+    this.el.resCalls.textContent = count(calls);
+    this.el.resTokensUsed.textContent = count(tokensUsed);
+    const banned = reason === 'ban';
+    const label = providerLabel || getPlan(provider)?.label || '当前计划';
+    this.el.over.dataset.reason = banned ? 'ban' : 'combat';
+    this.el.overTitle.textContent = banned ? '鸭鸭被封号了' : '鸭鸭倒下了';
+    this.el.overSub.textContent = banned ? `${label} 的调用中断了本次守卫` : '农场失守…但羽毛仍在风中飘扬';
+    this.el.overReason.textContent = banned
+      ? '死亡原因：虚构游戏封号。成功付费调用后随机触发，本次资源已消耗，未发出攻击；护盾和免死无法抵挡。不代表真实平台的规则或统计。'
+      : '死亡原因：战斗阵亡。下次留一点调用预算，额度用完后还可以按量继续守卫。';
+    this.el.overReason.classList.toggle('ban', banned);
     this.el.recordBadge.classList.toggle('hidden', !isRecord);
   }
 

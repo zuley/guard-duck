@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
 import { FX } from './fx.js';
-import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GUNS, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
+import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
+import { PLANS, STARTING_COINS, getPlan, coinsToMicros, microsToCoins, quoteSubscription, quoteUsage, settleInvocation, banChance, PROTECTION_ITEMS, getProtection, rollProtection } from './subscriptions.js';
 import { ARENA, GATES, GATE_LANE_HALF, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
 import { textTexture } from './textures.js';
 import { makePickupVisual } from './pickups.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
+const GAMEPAD_SKILLS = [[12, 1], [15, 2], [13, 3], [14, 4]];
 
 // 头顶名字精灵：贴图由 textTexture 内部统一缓存（32px 小栅格），此处不再自建缓存
 function makeNameSprite(text, color = '#ffffff', height = 0.3) {
@@ -56,6 +58,7 @@ export class Game {
     this._frustum = new THREE.Frustum();
     this._projMat = new THREE.Matrix4();
     this.rng = mulberry32(Date.now() & 0xffff);
+    this.banRng = mulberry32((Date.now() ^ 0xa57bc97d) >>> 0); // 与出怪/掉落独立，可注入测试 RNG
     this.t = 0;
     this.showFps = false;
     this.fragile = false;
@@ -64,21 +67,11 @@ export class Game {
     this.mouseFire = false;
     this.best = this.loadBest();
 
-    this.playerDuck = new Duck('player', 1, 'rifle', { gunId: 'claude', accent: GUNS.claude.accent });
+    this.playerDuck = new Duck('player', 1, 'rifle', { planId: 'ds', accent: PLANS.ds.accent });
     engine.scene.add(this.playerDuck.group);
     this.playerDuck.group.position.set(0, 0, 3);
     this.playerHpBar = this.makeHpBar(0x7ee06a, '鸭鸭', '#ffe9a8');
     this.playerHpBar.group.visible = false;
-    const rbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x1a1208, transparent: true, opacity: 0.75, depthWrite: false }));
-    rbg.scale.set(1.5, 0.09, 1);
-    const rfill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffc040, transparent: true, opacity: 0.95, depthWrite: false }));
-    rfill.scale.set(0.001, 0.05, 1);
-    const rbar = new THREE.Group();
-    rbar.add(rbg, rfill);
-    rbar.position.y = -0.17;
-    rbar.visible = false;
-    this.playerHpBar.group.add(rbar);
-    this.playerHpBar.reload = { group: rbar, fill: rfill };
     const imGeo = new THREE.RingGeometry(0.22, 0.34, 24);
     imGeo.rotateX(-Math.PI / 2);
     this.impactMarker = new THREE.Mesh(imGeo, new THREE.MeshBasicMaterial({ color: 0xffd080, transparent: true, opacity: 0.85, depthWrite: false }));
@@ -108,8 +101,8 @@ export class Game {
   resetStats() {
     this.p = {
       pos: new THREE.Vector3(0, 0, 3), vel: new THREE.Vector3(),
-      hp: 100, maxHp: 100, mag: WEAPON.magSize, reserve: WEAPON.reserveStart,
-      heat: 0, fireT: 0, reloadT: 0, dashT: 0, dashCd: 0, iframes: 0,
+      hp: 100, maxHp: 100,
+      heat: 0, fireT: 0, dashT: 0, dashCd: 0, iframes: 0,
       lastHurt: -99, aimYaw: 0, moving: false, dashDir: new THREE.Vector3(0, 0, -1),
       shield: 0, shieldMax: 0, skillShield: 0, shieldSkillT: 0, rageT: 0, hasteT: 0,
     };
@@ -119,10 +112,16 @@ export class Game {
     this.spawnQueue = [];
     this.spawnT = 0;
     this.kills = 0; this.shots = 0; this.hits = 0; this.score = 0; this.time = 0;
-    this.coins = 0; this.coinsEarned = 0;
-    this.ownedGuns = ['claude'];
-    this.gunId = 'claude';
-    this.mags = { claude: WEAPON.magSize };
+    this.walletMicros = coinsToMicros(STARTING_COINS);
+    this.earnedMicros = 0; // 启动预算不计入本局挣得的收入
+    this.planId = null;
+    this.tokens = 0;
+    this.quotaGranted = 0;
+    this.subscription = { paidWave: 0, processedWave: 0 };
+    this.protections = Object.fromEntries(PROTECTION_ITEMS.map((it) => [it.id, 0]));
+    this.calls = 0; this.tokensUsed = 0;
+    this.result = null;
+    this.lastFundsHint = -Infinity;
     this.level = 1; this.xp = 0; this.xpEarned = 0;
     this.cards = {};        // 卡牌 id → 已叠层数
     this.cardDraft = null;  // 当前三选一候选
@@ -130,7 +129,7 @@ export class Game {
     this.phoenixUsed = false;
     this.guardianCd = 0;
     this.orbitT = 0;
-    this.dryT = 0; this.rescued = false; this.overTimer = null;
+    this.overTimer = null;
     this.skillCd = { storm: 0, shield: 0, rage: 0, slow: 0 };
     this.slowT = 0; this.slowFactor = 1;
     this.recomputeLoadout();
@@ -140,7 +139,7 @@ export class Game {
 
   recomputeLoadout() {
     const oldMax = this.loadout ? this.loadout.maxHp : this.p.maxHp;
-    this.loadout = applyCards(computeLoadout(this.gunId), cardEffects(this.cards, this.level));
+    this.loadout = applyCards(computeLoadout(this.planId), cardEffects(this.cards, this.level));
     const delta = this.loadout.maxHp - oldMax;
     this.p.maxHp = this.loadout.maxHp;
     this.p.hp = Math.min(this.p.maxHp, this.p.hp + Math.max(0, delta));
@@ -177,8 +176,11 @@ export class Game {
     this.state = 'playing';
     this.hud.screen(null);
     this.hud.hudOn(true);
-    this.hud.toast('守卫农场！掠夺者即将来袭…');
+    this.hud.toast('180 金币启动预算 · 先选择一项订阅再开工');
     this.audio.startMusic();
+    this.updateHud();
+    this.openWeapons();
+    if (this.bot) this.subscribe('ds'); // 演示鸭也通过真实扣费入口选择低价计划
   }
 
   toTitle() {
@@ -194,6 +196,7 @@ export class Game {
     this.playerDuck.root.scale.setScalar(1);
     this.playerDuck.group.position.set(0, 0, 3);
     this.playerHpBar.group.visible = false;
+    this.hud.weaponsOpen(false);
     this.hud.screen('start');
     this.hud.hudOn(false);
     this.audio.stopMusic();
@@ -216,7 +219,36 @@ export class Game {
     this.hud.screen(null);
   }
 
-  /* ---------------- 极简武器面板 ---------------- */
+  /* ---------------- 单一订阅 / 整数微金币账本 ---------------- */
+
+  get coins() { return microsToCoins(this.walletMicros); }
+  set coins(value) { this.walletMicros = coinsToMicros(value); }
+  get coinsEarned() { return microsToCoins(this.earnedMicros); }
+  set coinsEarned(value) { this.earnedMicros = coinsToMicros(value); }
+
+  creditCoins(amount) {
+    if (this.state === 'over') return false;
+    let micros;
+    try { micros = coinsToMicros(amount); } catch { return false; }
+    if (!Number.isSafeInteger(this.walletMicros + micros) || !Number.isSafeInteger(this.earnedMicros + micros)) return false;
+    this.walletMicros += micros;
+    this.earnedMicros += micros;
+    return true;
+  }
+
+  debitMicros(amount) {
+    if (this.state === 'over' || !Number.isSafeInteger(amount) || amount < 0 || amount > this.walletMicros) return false;
+    this.walletMicros -= amount;
+    return true;
+  }
+
+  get subscriptionStatus() {
+    const { paidWave, processedWave } = this.subscription;
+    return getPlan(this.planId) && paidWave > 0 && paidWave === processedWave ? 'active' : 'metered';
+  }
+
+  usageQuote() { return quoteUsage(this.planId, this.tokens, this.loadout); }
+  currentBanChance() { return banChance(this.planId, this.protections); }
 
   openWeapons() {
     if (this.state !== 'playing') return;
@@ -232,54 +264,78 @@ export class Game {
 
   closeWeapons() {
     if (this.state !== 'weapons') return;
-    this.state = 'playing';
     this.keys.clear();
     this.mouse.down = false;
     this.mouseFire = false;
     this.padFire = false;
     this.hud.weaponsOpen(false);
+    if (!this.planId) this.toTitle();
+    else this.state = 'playing';
     this.audio.uiClick();
   }
 
-  // 只接受面板内的四把模型枪；已拥有的切换不扣钱，也不会凭空补满弹匣。
-  buyGun(id) {
-    if (this.state !== 'weapons') return;
-    const g = Object.hasOwn(GUNS, id) ? GUNS[id] : null;
-    if (!g || this.gunId === id) return;
-    if (!this.ownedGuns.includes(id)) {
-      if (this.coins < g.price) { this.hud.toast('金币不足！'); return; }
-      this.coins -= g.price;
-      this.ownedGuns.push(id);
-      this.hud.toast(`购入 ${g.label}！`);
-    } else this.hud.toast(`装备 ${g.label}`);
-    this.equipGun(id);
-    this.hud.renderWeapons(this);
-  }
-
-  equipGun(id) {
-    if (!this.ownedGuns.includes(id) || this.gunId === id) return;
-    this.mags[this.gunId] = this.p.mag;
-    this.gunId = id;
-    this.recomputeLoadout();
-    this.p.mag = Math.min(this.mags[id] ?? this.loadout.magSize, this.loadout.magSize);
-    this.mags[id] = this.p.mag;
-    this.p.reloadT = 0;
+  // 唯一切换入口：明确选择、付目标全费、旧额度作废；没有永久拥有或免费装备路径。
+  subscribe(id) {
+    if (this.state !== 'weapons') return false;
+    const plan = getPlan(id);
+    if (!plan || this.planId === id) return false;
+    const quote = quoteSubscription(id, this.loadout);
+    if (!quote || !this.debitMicros(quote.feeMicros)) {
+      this.hud.toast('金币不足，订阅与原有额度未改变');
+      return false;
+    }
+    const first = !this.planId;
+    const coveredWave = this.waveState === 'inter' ? this.wave + 1 : Math.max(1, this.wave);
+    this.planId = id;
+    this.tokens = quote.quota;
+    this.quotaGranted = quote.quota;
+    this.subscription = { paidWave: coveredWave, processedWave: coveredWave };
+    this.recomputeLoadout(); // 只重算一次，不在属性计算内发 Token 或扣费
     this.rebuildPlayerDuck();
-    this.audio.reload();
+    this.hud.toast(`订阅 ${plan.label} · -${plan.fee} 金币 · +${quote.quota} Token · 已付第 ${coveredWave} 波`);
+    this.hud.subscription(this);
+    this.hud.coins(this.coins);
+    this.audio.uiClick();
+    if (first) this.closeWeapons();
+    else this.hud.renderWeapons(this);
+    return true;
   }
 
-  cycleGun(dir) {
-    if (this.state !== 'playing') return; // 面板 / 选卡 / 暂停时不得切枪
-    const order = Object.keys(GUNS).filter((id) => this.ownedGuns.includes(id));
-    if (order.length < 2) return;
-    const i = order.indexOf(this.gunId);
-    this.equipGun(order[(i + dir + order.length) % order.length]);
-    this.hud.toast(`切换 ${this.loadout.gun.label}`);
+  renewSubscription(wave) {
+    if (this.state !== 'playing' || !Number.isSafeInteger(wave) || wave < 1) return false;
+    const plan = getPlan(this.planId);
+    if (!plan) return false;
+    // 同波只结算一次，包含首波/波间预付及余额不足的失败结算。
+    if (wave <= this.subscription.processedWave) return this.subscription.paidWave === wave;
+    const quote = quoteSubscription(this.planId, this.loadout);
+    this.subscription.processedWave = wave;
+    this.tokens = 0;
+    this.quotaGranted = 0;
+    if (!quote || !this.debitMicros(quote.feeMicros)) {
+      this.hud.toast(`${plan.label} 第 ${wave} 波未续费 · 旧额度到期 · 改为按量扣金币`);
+      return false;
+    }
+    this.subscription.paidWave = wave;
+    this.tokens = quote.quota;
+    this.quotaGranted = quote.quota;
+    return true;
+  }
+
+  payInvocation() {
+    if (this.state !== 'playing' || !getPlan(this.planId)) return null;
+    const payment = settleInvocation(this.walletMicros, this.tokens, this.planId, this.loadout);
+    if (!payment) return null;
+    this.walletMicros = payment.walletMicros;
+    this.tokens = payment.remainingTokens;
+    this.calls++;
+    this.tokensUsed += payment.tokens;
+    return payment;
   }
 
   // 不限时护盾与限时蹲防盾分开记账，总数仍用 p.shield 供 HUD 显示。
   // cap 只限制本次来源的补充，不得把更大的现有护盾截小。
   addShield(amount, cap = Infinity) {
+    if (this.state === 'over') return 0;
     const p = this.p;
     const permanent = Math.max(0, p.shield - (p.skillShield || 0));
     const added = Math.max(0, Math.min(amount, cap - permanent));
@@ -291,7 +347,7 @@ export class Game {
   // 打工人福利拾取即生效，反馈显示实际收益（满血/护盾上限不虚报）。
   applyLootEffect(eff) {
     const p = this.p;
-    if (!eff) return '';
+    if (!eff || this.state === 'over') return '';
     switch (eff.kind) {
       case 'heal': {
         const before = p.hp;
@@ -304,7 +360,6 @@ export class Game {
         const added = this.addShield(eff.amount, eff.cap);
         return added ? `护盾 +${Math.round(added)}` : '护盾充足';
       }
-      case 'ammo': p.reserve += eff.amount; return `备弹 +${eff.amount}`;
       case 'xp': {
         const amount = Math.round(eff.amount * this.loadout.xpMul);
         this.addXp(amount);
@@ -319,6 +374,7 @@ export class Game {
   /* ---------------- 等级 / 天赋 / 技能 ---------------- */
 
   addXp(n) {
+    if (this.state === 'over' || !Number.isSafeInteger(n) || n <= 0) return;
     this.xp += n; this.xpEarned += n;
     const prevCount = skillCountForLevel(this.level);
     let leveled = false;
@@ -349,6 +405,7 @@ export class Game {
 
   // 抽三张卡并进入选卡状态（战斗暂停）。卡池枯竭时直接跳过，不卡流程。
   offerCards() {
+    if (this.state !== 'playing') return false;
     const draft = rollCards(this.rng, this.cards, this.wave, 3);
     if (!draft.length) return false;
     this.cardDraft = draft;
@@ -374,7 +431,7 @@ export class Game {
     this.cardDraft = null;
     this.recomputeLoadout();
     // 即时补给类卡：立刻结算，不必等下一波
-    if (id === 'c_ammo') this.p.reserve += 48;
+    if (id === 'c_ammo') this.creditCoins(30);
     if (id === 'c_hp') this.p.hp = Math.min(this.p.maxHp, this.p.hp + 25);
     if (id === 'g_guardian') this.guardianCd = 0;
     this.syncOrbit();
@@ -430,6 +487,7 @@ export class Game {
   }
 
   updateOrbit(dt) {
+    if (this.state !== 'playing') return;
     const mod = this.loadout.mods.orbit;
     if (!mod || !this.orbitals.length) return;
     this.orbitT += dt * 1.9;
@@ -504,7 +562,7 @@ export class Game {
 
   rebuildPlayerDuck() {
     const old = this.playerDuck;
-    const duck = new Duck('player', 1, this.loadout.gun.model, { gunId: this.gunId, accent: this.loadout.gun.accent });
+    const duck = new Duck('player', 1, this.loadout.gun.model, { planId: this.planId || 'ds', accent: this.loadout.gun.accent });
     duck.group.position.copy(old.group.position);
     duck.yaw = old.yaw;
     this.engine.scene.remove(old.group);
@@ -549,7 +607,7 @@ export class Game {
     if (this.state === 'playing') {
       this.time += dt;
       this.updatePlayer(dt);
-      this.updateWaves(dt);
+      if (this.state === 'playing') this.updateWaves(dt);
       // 选卡立即冻结；阵亡当帧也不能再靠工资/福利回血或继续收金币。
       if (this.state === 'playing') this.updateEnemies(dt);
       if (this.state === 'playing') this.updateBullets(dt);
@@ -568,11 +626,11 @@ export class Game {
     const p = this.p;
     this.hud.hp(p.hp, p.maxHp);
     this.hud.dash(1 - p.dashCd / (1.1 * (this.loadout.dashCdMul ?? 1)));
-    this.hud.ammo(p.mag, p.reserve, p.reloadT, this.loadout.reloadTime);
+    this.hud.subscription(this);
     this.hud.stats(Math.max(1, this.wave), this.kills, this.score, this.time);
     this.hud.remain(this.spawnQueue.length + this.enemies.reduce((a, e) => a + (e.dead ? 0 : 1), 0));
     this.hud.coins(this.coins);
-    this.hud.setWeapon(this.loadout.gun.label, this.gunId);
+    this.hud.setWeapon(this.loadout.gun.label, this.planId || 'ds');
     this.hud.growth(this.level, this.xp, xpForLevel(this.level), Object.values(this.cards).reduce((a, b) => a + b, 0));
     this.hud.skills(this.loadout.skills, this.skillCd, { rage: p.rageT, shield: p.shieldSkillT, slow: this.slowT });
     // 护盾条按「本局最大护盾」归一：福利 / 技能盾 / 卡牌共用显示，限时部分独立到期。
@@ -601,6 +659,7 @@ export class Game {
   /* ---------------- 玩家 ---------------- */
 
   updatePlayer(dt) {
+    if (this.state !== 'playing') return;
     const p = this.p;
     if (this.bot) this.botControl();
     const k = this.keys;
@@ -713,43 +772,19 @@ export class Game {
     this.impactMarker.visible = markGap > 0.5;
     this.impactMarker.position.set(this.impactPoint.x, groundHeight(this.impactPoint.x, this.impactPoint.z) + 0.03, this.impactPoint.z);
 
-    // 射击 / 换弹
+    // 武器调用：一次连发 / 散射只支付一次 Token，失败不吞部分额度。
     p.fireT = Math.max(0, p.fireT - dt);
     p.heat = Math.max(0, p.heat - dt * 1.1);
-    if (p.reloadT > 0) {
-      p.reloadT -= dt;
-      if (p.reloadT <= 0) {
-        const need = this.loadout.magSize - p.mag;
-        const take = Math.min(need, p.reserve);
-        p.mag += take; p.reserve -= take;
-      }
-    } else if (this.mouse.down && p.fireT <= 0) {
-      if (p.mag > 0) this.fire();
-      else { this.audio.emptyClick(); this.startReload(); }
-    }
-    if (k.has('KeyR')) { this.startReload(); k.delete('KeyR'); }
+    if (this.mouse.down && p.fireT <= 0) this.fire();
+    if (this.state !== 'playing') return; // 封号时不再自愈或重新显示头顶血条
 
     // 缓慢自愈（自愈绒毛卡提升回复速率）
     if (this.time - p.lastHurt > 6 && p.hp > 0) p.hp = Math.min(p.maxHp, p.hp + this.loadout.regen * dt);
-
-    // 弹药死锁救援：弹匣+备弹打空后无法击杀→无掉落，6 秒后在脚边补给出一个弹药箱（每波一次）
-    if (p.mag + p.reserve <= 0) {
-      this.dryT += dt;
-      if (this.dryT > 6 && !this.rescued) {
-        this.rescued = true;
-        this.spawnPickup(p.pos.clone(), 'ammo');
-        this.hud.toast('弹药耗尽！紧急补给已送达脚边');
-        this.audio.pickup();
-      }
-    } else {
-      this.dryT = 0;
-    }
 
     this.playerDuck.group.position.copy(p.pos);
     this.playerDuck.update(dt, {
       moving: p.moving, speed: p.vel.length(), aimYaw: p.aimYaw,
       dash: p.dashT > 0 ? 1 : 0,
-      reload: p.reloadT > 0 ? 1 - p.reloadT / this.loadout.reloadTime : 0,
     });
 
     const ratio = Math.max(0, p.hp / p.maxHp);
@@ -757,15 +792,6 @@ export class Game {
     this.playerHpBar.group.position.set(p.pos.x, p.pos.y + 1.9, p.pos.z);
     this.playerHpBar.fill.scale.x = 1.42 * ratio;
     this.playerHpBar.fill.position.x = -(1.42 * (1 - ratio)) / 2;
-    const rl = this.playerHpBar.reload;
-    if (p.reloadT > 0) {
-      const prog = Math.min(1, Math.max(0, 1 - p.reloadT / this.loadout.reloadTime));
-      rl.group.visible = true;
-      rl.fill.scale.x = Math.max(0.001, 1.42 * prog);
-      rl.fill.position.x = -(1.42 * (1 - prog)) / 2;
-    } else {
-      rl.group.visible = false;
-    }
   }
 
   botControl() {
@@ -796,21 +822,28 @@ export class Game {
     if (move.x > 0.35) k.add('KeyD'); else if (move.x < -0.35) k.add('KeyA');
     if (move.z > 0.35) k.add('KeyS'); else if (move.z < -0.35) k.add('KeyW');
     if (nd < 3.2 && p.dashCd <= 0) k.add('Space');
-    if (p.mag === 0) k.add('KeyR');
-  }
-
-  startReload() {
-    const p = this.p;
-    if (p.reloadT > 0 || p.mag >= this.loadout.magSize || p.reserve <= 0) return;
-    p.reloadT = this.loadout.reloadTime;
-    this.audio.reload(this.loadout.reloadTime);
   }
 
   fire() {
     const p = this.p;
+    if (this.state !== 'playing' || !getPlan(this.planId) || p.fireT > 0) return false;
+    const payment = this.payInvocation();
+    if (!payment) {
+      if (this.time - this.lastFundsHint >= 1.2) {
+        this.lastFundsHint = this.time;
+        this.hud.toast('额度与余额不足 · 移动拾取福利，或按 1 释放免费冷却技能');
+        this.audio.emptyClick();
+      }
+      return false;
+    }
+    // 只有真正付费的整次调用才抽一次；被封的这次已付费，但不能产生攻击。
+    const risk = this.currentBanChance();
+    if (risk > 0 && this.banRng() < risk) {
+      this.endRun('ban');
+      return false;
+    }
     const lo = this.loadout;
     const raging = p.rageT > 0;
-    p.mag--;
     p.fireT = 60 / (lo.rpm * (raging ? lo.rage.rpmMul : 1));
     p.heat = Math.min(1, p.heat + 0.11);
     const extra = lo.mods.multishot || 0;
@@ -821,6 +854,12 @@ export class Game {
     const up = new THREE.Vector3(0, 1, 0);
     const dmg = lo.damage * (raging ? lo.rage.dmgMul : 1);
     const side = new THREE.Vector3(base.z, 0, -base.x).normalize();
+    const attack = {
+      provider: this.planId,
+      falloffStart: lo.falloffStart, falloffEnd: lo.falloffEnd, falloffMin: lo.falloffMin,
+      mods: Object.fromEntries(Object.entries(lo.mods).map(([key, value]) =>
+        [key, value && typeof value === 'object' ? { ...value } : value])),
+    };
     for (let i = 0; i < lo.pellets + extra; i++) {
       const d = base.clone();
       d.applyAxisAngle(up, (Math.random() - 0.5) * (spread * 2 + (lo.pellets > 1 ? (lo.gun.pelletSpread ?? 0.14) : 0)));
@@ -830,23 +869,23 @@ export class Game {
       const org = origin.clone();
       if (i >= lo.pellets) org.addScaledVector(side, ((i - lo.pellets) % 2 === 0 ? 1 : -1) * 0.28);
       const b = { pos: org, vel: d.multiplyScalar(lo.bulletSpeed), life: 1.1, traveled: 0, range: lo.range, dmg,
-        pierce: lo.mods.pierce || 0 };
+        attack, pierce: (lo.intrinsicPierce || 0) + (lo.mods.pierce || 0) };
       b.vis = this.makeBulletVis(raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : (lo.gun.accent ?? 0xffd080), 1.6);
       b.vis.position.copy(b.pos);
       b.vis.lookAt(b.pos.clone().add(b.vel));
       this.bullets.push(b);
     }
     this.fx.flash(origin, 0.22);
-    this.fx.casing(origin, base);
     this.fx.smoke(origin, 1, 0x8a8078, 0.22, 1.6, 0.45);
     this.playerDuck.kick();
     this.engine.addShake(lo.pellets > 1 ? 0.16 : 0.09);
     this.audio.shoot();
+    return true;
   }
 
   // 荆棘羽绒（绿）：受击对周围敌人反伤
   thornsBlast(mods) {
-    if (!mods.thorns) return;
+    if (this.state !== 'playing' || !mods.thorns) return;
     const p = this.p;
     this.fx.ring(p.pos.clone().setY(0.5), 0x7ee06a, mods.thorns.radius);
     for (const e of this.enemies) {
@@ -910,34 +949,51 @@ export class Game {
     this.engine.damageFlash = 1;
     this.engine.addShake(0.32);
     this.fx.feathers(p.pos, 0xffd95e, 6, 2.2);
-    if (p.hp <= 0) {
-      p.hp = 0;
-      this.state = 'over';
-      this.playerDuck.die();
-      this.playerHpBar.group.visible = false;
-      this.fx.feathers(p.pos, 0xffd95e, 26, 4);
-      this.fx.ring(p.pos.clone().setY(0.5), 0xff8060, 3);
-      this.audio.gameOver();
-      this.audio.stopMusic();
-      // 0 分不写纪录（避免占坑）；平纪录也算新纪录
-      const isRecord = this.score > 0 && (!this.best || this.score >= this.best.score);
-      if (isRecord) {
-        this.best = { score: this.score, wave: this.wave, kills: this.kills };
-        try { localStorage.setItem(this.bestKey(), JSON.stringify(this.best)); } catch { /* 存储不可用时忽略 */ }
-      }
-      this.hud.results({
-        wave: this.wave, kills: this.kills, score: this.score,
-        acc: this.shots ? this.hits / this.shots : 0,
-        time: this.time, coins: this.coinsEarned,
-        best: this.best ? this.best.score : 0, isRecord,
-      });
-      this.overTimer = setTimeout(() => { if (this.state === 'over') this.hud.screen('over'); }, 1100);
+    if (p.hp <= 0) this.endRun('combat');
+  }
+
+  // 幂等终局。封号绕过伤害管线，所以无敌、护盾、结界和不死鸟都无法抵挡。
+  endRun(reason = 'combat') {
+    if (this.state !== 'playing' || !['combat', 'ban'].includes(reason)) return false;
+    this.state = 'over';
+    const p = this.p;
+    p.hp = 0;
+    this.keys.clear();
+    this.mouse.down = false;
+    this.mouseFire = false;
+    this.padFire = false;
+    this.playerDuck.die();
+    this.playerHpBar.group.visible = false;
+    this.impactMarker.visible = false;
+    this.fx.feathers(p.pos, 0xffd95e, 26, 4);
+    this.fx.ring(p.pos.clone().setY(0.5), reason === 'ban' ? 0xc48aff : 0xff8060, 3);
+    this.audio.gameOver();
+    this.audio.stopMusic();
+    // 0 分不写纪录（避免占坑）；平纪录也算新纪录。
+    const isRecord = this.score > 0 && (!this.best || this.score >= this.best.score);
+    if (isRecord) {
+      this.best = { score: this.score, wave: this.wave, kills: this.kills };
+      try { localStorage.setItem(this.bestKey(), JSON.stringify(this.best)); } catch { /* 存储不可用时忽略 */ }
     }
+    this.result = {
+      reason, provider: this.planId, providerLabel: getPlan(this.planId)?.label ?? '',
+      wave: this.wave, kills: this.kills, score: this.score,
+      acc: this.shots ? this.hits / this.shots : 0,
+      time: this.time, coins: this.coinsEarned, calls: this.calls, tokensUsed: this.tokensUsed,
+      best: this.best ? this.best.score : 0, isRecord,
+    };
+    this.hud.results(this.result);
+    this.overTimer = setTimeout(() => {
+      this.overTimer = null;
+      if (this.state === 'over') this.hud.screen('over');
+    }, 1100);
+    return true;
   }
 
   /* ---------------- 波次 ---------------- */
 
   updateWaves(dt) {
+    if (this.state !== 'playing' || !getPlan(this.planId)) return;
     if (this.waveState === 'inter') {
       this.interT -= dt;
       if (this.interT <= 0) this.nextWave();
@@ -962,7 +1018,9 @@ export class Game {
   }
 
   nextWave() {
+    if (this.state !== 'playing' || !getPlan(this.planId)) return;
     this.wave++;
+    this.renewSubscription(this.wave);
     this.plan = wavePlan(this.wave);
     const q = [];
     for (const [type, n] of Object.entries(this.plan.counts)) {
@@ -980,7 +1038,6 @@ export class Game {
     this.spawnQueue = q;
     this.spawnT = 0.4;
     this.waveState = 'fight';
-    this.rescued = false; this.dryT = 0;
     // 开工护盾（绿）：每波开始白给一层护盾
     const ws = this.loadout.mods.waveShield;
     if (ws) {
@@ -992,6 +1049,7 @@ export class Game {
   }
 
   spawnEnemy(entry) {
+    if (this.state !== 'playing') return;
     const type = typeof entry === 'string' ? entry : entry.type;
     const elite = typeof entry === 'object' && !!entry.elite;
     const t = ENEMY_TYPES[type];
@@ -1085,10 +1143,11 @@ export class Game {
   // 菜单手柄导航：方向键/D-pad 移动焦点，A 确认；焦点环复用 :focus 样式
   menuFocusables() {
     const sel = {
-      weapons: '#weaponGrid .weaponCard, #weaponClose',
+      weapons: '#weaponScreen button, #weaponScreen summary, #weaponScreen a[href]',
       card: '#cardScreen .pickCard',
       cardbook: '#cardBookClose',
       paused: '#pauseScreen button, #pauseScreen input',
+      over: '#gameoverScreen button',
     }[this.state];
     if (!sel) return [];
     return [...document.querySelectorAll(sel)].filter((el) => {
@@ -1144,12 +1203,13 @@ export class Game {
       this.padFire = btn(7) || btn(6);
       this.mouse.down = this.mouseFire || this.padFire;
       if (edge(0)) k.add('Space');
-      if (edge(2)) k.add('KeyR');
+      // 战斗十字键顺时针对应技能 1–4；菜单分支只导航，沿用同一份按键边沿。
+      for (const [button, skill] of GAMEPAD_SKILLS) {
+        if (edge(button)) this.castSkill(skill);
+      }
       if (edge(1)) this.openWeapons();
       if (edge(3)) this.openCardBook();
       if (edge(9)) this.pause();
-      if (edge(4)) this.cycleGun(-1);
-      if (edge(5)) this.cycleGun(1);
     } else if (this.state === 'weapons' || this.state === 'card' || this.state === 'cardbook' || this.state === 'paused') {
       // 菜单内：方向导航 + A 确认 + B/Start 返回
       const now = this.t;
@@ -1172,7 +1232,7 @@ export class Game {
         if (el) {
           if (el.tagName === 'INPUT') el.focus();
           else el.click();
-          // 武器卡购买后会重绘并恢复焦点，不要把新焦点清掉。
+          // 计划订阅后会重绘并恢复焦点，不要把新焦点清掉。
           if (el.tagName === 'BUTTON' && !el.classList.contains('weaponCard')) el.blur();
         }
       }
@@ -1187,12 +1247,14 @@ export class Game {
   /* ---------------- 敌人 ---------------- */
 
   updateEnemies(dt) {
+    if (this.state !== 'playing') return;
     const p = this.p;
     const cam = this.engine.camera;
     const frustum = this._frustum.setFromProjectionMatrix(
       this._projMat.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     const visPoint = new THREE.Vector3();
     for (const e of this.enemies) {
+      if (this.state !== 'playing') return;
       if (e.dead) { e.duck.update(dt, { moving: false }); continue; }
       const t = ENEMY_TYPES[e.type];
       const to = p.pos.clone().sub(e.pos); to.y = 0;
@@ -1202,7 +1264,7 @@ export class Game {
       // 燃烧弹：持续伤害，每 0.5s 跳一次数字，避免每帧刷屏
       if (e.burnT > 0) {
         e.burnT -= dt;
-        this.damageEnemy(e, e.burnDps * dt, { noProc: true, raw: true, silent: true });
+        this.damageEnemy(e, e.burnDps * dt, { mods: e.burnMods, noProc: true, raw: true, silent: true });
         e.burnFxT = (e.burnFxT || 0) - dt;
         if (e.burnFxT <= 0 && !e.dead) {
           e.burnFxT = 0.5;
@@ -1224,6 +1286,7 @@ export class Game {
         if (e.skillT > 0) {
           e.skillT -= dt;
           if (e.skillT <= 0) this.castEnemySkill(e);
+          if (this.state !== 'playing') return;
         } else if (e.skillCd <= 0 && (e.skillKind === 'nova' || dist < ELITE_SKILL.range)) {
           const sk = e.skillKind === 'nova' ? BOSS_SKILL : ELITE_SKILL;
           e.skillT = sk.windup; e.skillCd = sk.cd;
@@ -1245,6 +1308,7 @@ export class Game {
             // 挥击需视线畅通：隔着谷仓拐角等掩体不再命中
             if (dist < e.reach + 0.35 && !segBlocked(e.pos, p.pos, this.world.colliders)) {
               this.damagePlayer(e.damage);
+              if (this.state !== 'playing') return;
               this.fx.ring(p.pos.clone().setY(0.4), 0xff9060, 1.4);
               this.fx.spark(p.pos.clone().setY(0.7), dirN.clone().multiplyScalar(-0.5), 5, 0xffb080, 4);
             }
@@ -1351,9 +1415,8 @@ export class Game {
   // 保证子弹、爆炸、闪电、羽毛、燃烧走同一套规则，不会各算一套。
   // opts.noProc 用于溅射/连锁等派生伤害，防止无限递归。
   damageEnemy(e, amount, opts = {}) {
-    if (e.dead || amount <= 0) return 0;
-    const lo = this.loadout;
-    const mods = lo.mods;
+    if (this.state !== 'playing' || e.dead || amount <= 0) return 0;
+    const mods = opts.mods ?? this.loadout.mods;
     let dmg = amount;
     let crit = false;
     if (!opts.raw) {
@@ -1381,9 +1444,9 @@ export class Game {
   }
 
   // 子弹命中后的特效链：点燃 / 减速 / 爆炸 / 闪电。派生伤害一律 noProc 防递归。
-  applyHitMods(e, hitPos, baseDmg) {
-    const mods = this.loadout.mods;
-    if (mods.burn && !e.dead) { e.burnT = mods.burn.duration; e.burnDps = mods.burn.dps; }
+  applyHitMods(e, hitPos, baseDmg, mods = this.loadout.mods) {
+    if (this.state !== 'playing') return;
+    if (mods.burn && !e.dead) { e.burnT = mods.burn.duration; e.burnDps = mods.burn.dps; e.burnMods = mods; }
     if (mods.frost && !e.dead) { e.frostT = mods.frost.duration; e.frostFactor = mods.frost.factor; }
     if (mods.explosive) {
       const { radius, mul } = mods.explosive;
@@ -1394,9 +1457,9 @@ export class Game {
       for (const o of this.enemies) {
         if (o.dead || o === e) continue;
         if (Math.hypot(o.pos.x - hitPos.x, o.pos.z - hitPos.z) <= radius)
-          this.damageEnemy(o, baseDmg * mul, { noProc: true, noCrit: true, color: '#ffb070' });
+          this.damageEnemy(o, baseDmg * mul, { mods, noProc: true, noCrit: true, color: '#ffb070' });
       }
-      if (!e.dead) this.damageEnemy(e, baseDmg * mul, { noProc: true, noCrit: true, silent: true });
+      if (!e.dead) this.damageEnemy(e, baseDmg * mul, { mods, noProc: true, noCrit: true, silent: true });
     }
     if (mods.chain) {
       let from = e;
@@ -1411,7 +1474,7 @@ export class Game {
         if (!best) break;
         hitSet.add(best);
         this.fx.bolt(from.pos.clone().setY(from.pos.y + 0.8), best.pos.clone().setY(best.pos.y + 0.8));
-        this.damageEnemy(best, baseDmg * mods.chain.mul, { noProc: true, color: '#9fe8ff' });
+        this.damageEnemy(best, baseDmg * mods.chain.mul, { mods, noProc: true, color: '#9fe8ff' });
         from = best;
       }
       if (hitSet.size > 1) this.audio.zap();
@@ -1419,6 +1482,7 @@ export class Game {
   }
 
   killEnemy(e) {
+    if (this.state !== 'playing' || e.dead) return;
     e.dead = true;
     e.duck.die();
     if (e.hpBar) e.hpBar.group.visible = false;
@@ -1435,7 +1499,7 @@ export class Game {
     this.hud.feed([{ text: (e.elite ? '精英·' : '') + e.name, em: true }, { text: ' 被击倒 ' }, { text: `+${sc}`, em: true }]);
     const mods = this.loadout.mods;
     const c = Math.round(coinsFor(e.type, e.elite) * this.loadout.coinMul * (mods.goldRush || 1));
-    this.coins += c; this.coinsEarned += c;
+    this.creditCoins(c);
     this.fx.number(e.pos.clone().setY(e.pos.y + 1.3), `+${c} 金币`, '#ffd95e');
     this.addXp(Math.round(xpForKill(e.type, e.elite) * this.loadout.xpMul));
     if (this.loadout.killHeal > 0 && this.p.hp > 0) {
@@ -1447,9 +1511,9 @@ export class Game {
       const over = this.loadout.killHeal - healed;
       if (mods.overheal && over > 0.5) this.addShield(over, mods.overheal);
     }
-    if (mods.ammoBack && Math.random() < mods.ammoBack) {
-      this.p.reserve += 2;
-      this.fx.number(this.p.pos.clone().setY(this.p.pos.y + 1.4), '+2 备弹', '#ffd95e');
+    if (mods.cashback && this.rng() < mods.cashback) {
+      this.creditCoins(4);
+      this.fx.number(this.p.pos.clone().setY(this.p.pos.y + 1.4), '+4 消费返现', '#ffd95e');
     }
     if (mods.timeKill && Math.random() < mods.timeKill.chance) {
       this.slowT = Math.max(this.slowT, mods.timeKill.duration);
@@ -1470,13 +1534,16 @@ export class Game {
       this.audio.waveClear();
       this.fx.ring(e.pos.clone().setY(e.pos.y + 1), 0xffd24a, 4);
     }
-    const drop = rollDrop(this.rng, e.type, this.p.mag + this.p.reserve < 30, e.elite);
+    const drop = rollDrop(this.rng, e.type, e.elite);
     if (drop) this.spawnPickup(e.pos, drop);
+    const protection = rollProtection(this.rng, e.type, e.elite);
+    if (protection) this.spawnPickup(e.pos, 'protection', protection);
   }
 
   /* ---------------- 子弹 ---------------- */
 
   updateBullets(dt) {
+    if (this.state !== 'playing') return;
     const p = this.p;
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
@@ -1493,15 +1560,15 @@ export class Game {
             if (e.dead || (b.hitSet && b.hitSet.has(e))) continue;
             const r = e.radius + 0.22;
             if (Math.hypot(b.pos.x - e.pos.x, b.pos.z - e.pos.z) < r && b.pos.y < 1.7 * e.scale) {
-              const dmg = damageAtDistance(b.dmg, b.traveled, this.loadout);
+              const dmg = damageAtDistance(b.dmg, b.traveled, b.attack);
               if (!b.countedHit) { this.hits++; b.countedHit = true; } // 穿透多名目标仍只算这一弹命中
               this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.4), 7, 0xffd080, 6);
               this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 4, 2);
               this.audio.hit();
               this.hud.hitmarker(false);
               e.duck.kick();
-              this.damageEnemy(e, dmg);
-              this.applyHitMods(e, b.pos.clone(), dmg);
+              this.damageEnemy(e, dmg, { mods: b.attack?.mods });
+              this.applyHitMods(e, b.pos.clone(), dmg, b.attack?.mods);
               // 穿甲：记录已命中目标避免同一帧重复判定，穿透次数用尽才消失
               if (b.pierce > 0) {
                 b.pierce--;
@@ -1561,6 +1628,7 @@ export class Game {
           b.pos.add(step);
           if (Math.hypot(b.pos.x - p.pos.x, b.pos.z - p.pos.z) < 0.55 && b.pos.y < 1.4) {
             this.damagePlayer(b.dmg);
+            if (this.state !== 'playing') return;
             this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.4), 5, 0xff8060, 4);
             gone = true;
           }
@@ -1596,53 +1664,59 @@ export class Game {
   /* ---------------- 拾取 ---------------- */
 
   spawnPickup(pos, kind, item) {
+    if (this.state === 'over') return false;
     const mesh = makePickupVisual(kind, item);
-    if (!mesh) return;
+    if (!mesh) return false;
     mesh.position.copy(pos).setY(groundHeight(pos.x, pos.z) + 0.35);
     this.engine.scene.add(mesh);
-    this.pickups.push({ mesh, kind, item, t: 0, life: kind === 'loot' ? 26 : 22 });
+    this.pickups.push({ mesh, kind, item, t: 0, life: kind === 'loot' || kind === 'protection' ? 26 : 22 });
+    return true;
   }
 
   updatePickups(dt) {
+    if (this.state !== 'playing') return;
     const p = this.p;
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const pk = this.pickups[i];
+      const loot = pk.kind === 'loot' && typeof pk.item === 'string' && Object.hasOwn(LOOT_BY_ID, pk.item) ? LOOT_BY_ID[pk.item] : null;
+      const protection = pk.kind === 'protection' ? getProtection(pk.item) : null;
+      const valid = !!(loot || protection || pk.kind === 'health');
       pk.t += dt; pk.life -= dt;
       pk.mesh.rotation.y += dt * 1.6;
       pk.mesh.position.y = groundHeight(pk.mesh.position.x, pk.mesh.position.z) + 0.35 + Math.sin(pk.t * 2.4) * 0.08;
       pk.mesh.visible = pk.life > 3 || Math.sin(pk.t * 12) > -0.3;
-      let gone = pk.life <= 0;
-      // 拾取磁铁（绿）：扩大吸取范围，并把范围内的掉落物拉向玩家
-      const mag = this.loadout.mods.magnet;
-      const reach = 1.1 * (mag ? mag.mul : 1);
+      let gone = pk.life <= 0 || !valid;
+      // 拾取磁铁（绿）：四类保护物品也使用同样的吸取/过期/一次性结算规则。
+      const magnet = this.loadout.mods.magnet;
+      const reach = 1.1 * (magnet ? magnet.mul : 1);
       const dx = p.pos.x - pk.mesh.position.x, dz = p.pos.z - pk.mesh.position.z;
       const dist = Math.hypot(dx, dz);
-      if (!gone && mag && dist < reach * 2.6 && dist > reach) {
+      if (!gone && magnet && dist < reach * 2.6 && dist > reach) {
         const pull = Math.min(1, dt * 6);
         pk.mesh.position.x += dx * pull;
         pk.mesh.position.z += dz * pull;
       }
       if (!gone && dist < reach) {
-        if (mag && mag.heal && p.hp > 0) p.hp = Math.min(p.maxHp, p.hp + mag.heal);
-        if (pk.kind === 'ammo') {
-          const n = Math.round(48 * this.loadout.ammoPickupMul);
-          p.reserve += n;
-          this.hud.toast(`拾取弹药箱 +${n}`);
-        } else if (pk.kind === 'loot') {
-          const it = LOOT_BY_ID[pk.item];
-          this.coins += it.coins; this.coinsEarned += it.coins;
-          const eff = this.applyLootEffect(it.effect);
-          this.hud.toast(`拾取 ${it.label} · +${it.coins} 金币${eff ? ' · ' + eff : ''}`);
-          this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${it.label} +${it.coins}`, '#ffe28a');
-        } else {
+        if (magnet?.heal && p.hp > 0) p.hp = Math.min(p.maxHp, p.hp + magnet.heal);
+        if (loot) {
+          this.creditCoins(loot.coins);
+          const eff = this.applyLootEffect(loot.effect);
+          this.hud.toast(`拾取 ${loot.label} · +${loot.coins} 金币${eff ? ' · ' + eff : ''}`);
+          this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${loot.label} +${loot.coins}`, '#ffe28a');
+        } else if (protection) {
+          this.protections[protection.id] = Math.min(Number.MAX_SAFE_INTEGER, this.protections[protection.id] + 1);
+          this.hud.toast(`拾取【${protection.label}】×${this.protections[protection.id]} · 虚构风险叠加降低，最低保留基础概率的 5%`);
+          this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${protection.label} +1`, '#c4a1ff');
+        } else if (pk.kind === 'health') {
           p.hp = Math.min(p.maxHp, p.hp + 35);
           this.hud.toast('拾取面包 +35 生命');
         }
         this.audio.pickup();
-        this.fx.ring(pk.mesh.position, pk.kind === 'ammo' ? 0xffd95e : pk.kind === 'loot' ? LOOT_BY_ID[pk.item].color : 0xff9080, 1.6);
+        this.fx.ring(pk.mesh.position, loot?.color ?? protection?.color ?? 0xff9080, 1.6);
         gone = true;
       }
       if (gone) {
+        // 模板的 geometry/material/map 是共享资源，单个实例不得 dispose。
         this.engine.scene.remove(pk.mesh);
         this.pickups.splice(i, 1);
       }

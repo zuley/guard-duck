@@ -57,20 +57,30 @@
   #waveBanner .main { font-size: 52px; font-weight: 900; letter-spacing: .12em; color: #fff; text-shadow: 0 4px 0 rgba(0,0,0,.35), 0 0 34px rgba(255,217,94,.45); }
   #waveBanner .tip { font-size: 13px; color: rgba(255,255,255,.8); margin-top: 4px; letter-spacing: .2em; }
 
-  #ammoPanel { position: absolute; right: 18px; bottom: 18px; padding: 10px 16px; text-align: right; }
-  #ammoPanel .ammoRow { display: flex; align-items: center; gap: 12px; }
-  #gunIcon { width: 52px; height: 52px; opacity: .95; filter: brightness(1.6); }
-  #ammoPanel .weapon { font-size: 11px; letter-spacing: .18em; color: rgba(255,255,255,.6); }
-  #ammoPanel .nums { font-size: 42px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; }
-  #ammoPanel .nums #mag { color: #fff; }
-  #ammoPanel .nums #mag.empty { color: var(--danger); animation: blink .5s steps(2) infinite; }
-  #ammoPanel .nums #mag.low { color: var(--duck-orange); }
-  #ammoPanel .nums small { font-size: 16px; color: rgba(255,255,255,.55); font-weight: 700; }
-  #reloadHint { font-size: 11px; letter-spacing: .16em; color: var(--duck-orange); height: 15px; }
-  #reloadBar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.14); margin-top: 6px; overflow: hidden; opacity: 0; }
-  #reloadBar.on { opacity: 1; }
-  #reloadBar > i { display: block; height: 100%; width: 0; background: var(--duck-orange); }
-  @keyframes blink { 50% { opacity: .25; } }
+  #subscriptionPanel { position: absolute; right: 18px; bottom: 18px; width: 324px; max-width: calc(100% - 32px); padding: 12px 16px; }
+  .subscriptionRow { display: flex; align-items: center; gap: 10px; }
+  #gunIcon { width: 48px; height: 48px; flex: 0 0 auto; opacity: .95; filter: brightness(1.3); }
+  .subscriptionCol { flex: 1; min-width: 0; }
+  .subscriptionHeading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; }
+  #weaponName { font-size: 14px; font-weight: 800; color: var(--duck-yellow); }
+  #subscriptionStatus { font-size: 11px; color: #b9e6b0; }
+  #subscriptionStatus[data-status="metered"] { color: #ffc17d; }
+  .tokenNums { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; font-variant-numeric: tabular-nums; }
+  #tokensRemaining { font-size: 32px; font-weight: 900; line-height: 1.2; }
+  #tokensRemaining.empty { color: #ffc17d; }
+  .tokenNums small { font-size: 12px; color: rgba(255,255,255,.72); }
+  #usageHint { margin-top: 5px; font-size: 12px; line-height: 1.5; color: rgba(255,255,255,.82); overflow-wrap: anywhere; }
+  #usageHint.blocked { color: #ffb0a1; }
+  #banRisk { margin-top: 5px; font-size: 11px; line-height: 1.5; color: #b9dfbc; }
+  #banRisk.hasRisk { color: #ffc17d; }
+  .protectionCounts { display: flex; flex-wrap: wrap; gap: 7px 12px; }
+  #protectionCounts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 9px; margin-top: 8px; }
+  .protectionChip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; line-height: 1.5; color: rgba(255,255,255,.7); }
+  .protectionChip.held { color: #fff0c7; }
+  .protectionIcon { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--protection-color); color: var(--protection-color); font-style: normal; font-weight: 800; font-size: 11px; }
+  .protectionCount { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  #protectionCounts .protectionChip { font-size: 11px; }
+  #protectionCounts .protectionIcon { min-width: 18px; height: 18px; font-size: 10px; }
 
   #hintPanel { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; font-size: 10px; letter-spacing: .06em; color: rgba(255,255,255,.5); line-height: 1.7; }
   #hintPanel b { color: var(--duck-yellow); font-weight: 700; background: rgba(255,255,255,.1); border-radius: 4px; padding: 0 4px; margin-right: 2px; }
@@ -117,13 +127,13 @@
     position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
     background: radial-gradient(ellipse at 50% 30%, rgba(30,24,12,.55), rgba(6,6,10,.88));
     backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-    transition: opacity .45s; pointer-events: auto;
+    transition: opacity .45s; pointer-events: auto; padding: 16px;
   }
   .overlay.hidden { opacity: 0; pointer-events: none; }
   /* 子元素（.btn 等）显式 pointer-events:auto 会覆盖继承的 none，
      隐藏后仍形成透明点击死区（disabled 按钮还会吞掉事件），必须强制关闭 */
   .overlay.hidden * { pointer-events: none !important; }
-  .card { text-align: center; max-width: 640px; padding: 40px 48px; }
+  .card { text-align: center; width: min(640px, 100%); max-width: 100%; min-width: 0; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 32px clamp(16px, 4vw, 48px); }
   .logo { width: 132px; height: 132px; margin: 0 auto 6px; filter: drop-shadow(0 10px 26px rgba(0,0,0,.55)); animation: bob 3.2s ease-in-out infinite; }
   @keyframes bob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-9px) rotate(2deg); } }
   h1.title {
@@ -153,35 +163,57 @@
   /* 键盘/手柄焦点环 */
   .weaponCard:focus-visible, .btn:focus-visible, .volRow button:focus-visible, .volRow input:focus-visible { outline: 2px solid var(--duck-yellow); outline-offset: 3px; }
 
-  /* ---------- 武器面板 / 图鉴共用标题 ---------- */
+  /* ---------- 订阅面板 / 图鉴共用标题 ---------- */
   .menuHead { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 18px; }
   .menuTitle { font-size: 28px; font-weight: 900; letter-spacing: .12em; color: var(--duck-yellow); }
-  .menuCounter { margin-left: auto; font-size: 12px; letter-spacing: .08em; color: rgba(255,255,255,.7); }
+  .menuCounter { margin-left: auto; font-size: 12px; letter-spacing: .04em; color: rgba(255,255,255,.78); min-width: 0; overflow-wrap: anywhere; }
   .menuCounter b { font-size: 23px; color: var(--duck-yellow); font-variant-numeric: tabular-nums; margin-left: 6px; }
-  .menuHead .btn.ghost { margin: 0; padding: 9px 18px; font-size: 12px; letter-spacing: .08em; }
-  .menuFoot { margin-top: 16px; font-size: 11px; line-height: 1.9; letter-spacing: .08em; color: rgba(255,255,255,.55); text-align: center; }
-  .weaponWrap { width: min(960px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; padding: 24px; text-align: left; }
-  .weaponIntro { margin: -8px 0 18px; font-size: 12px; line-height: 1.7; color: rgba(255,255,255,.6); }
-  #weaponGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .weaponCard { min-width: 0; position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 7px; padding: 16px 14px 12px; border: 1px solid rgba(255,255,255,.18); border-top: 3px solid var(--gun-accent); border-radius: 12px; background: rgba(255,255,255,.045); color: #fff; font-family: inherit; text-align: left; cursor: pointer; transition: background .15s, border-color .15s, transform .15s; }
-  .weaponCard:hover, .weaponCard:focus-visible { background: rgba(255,255,255,.09); border-color: var(--gun-accent); transform: translateY(-3px); }
+  .menuHead .btn.ghost { margin: 0; padding: 10px 18px; font-size: 13px; letter-spacing: .04em; flex-shrink: 0; }
+  .menuFoot { margin-top: 16px; font-size: 12px; line-height: 1.9; letter-spacing: .04em; color: rgba(255,255,255,.7); text-align: center; }
+  #weaponScreen { padding: 16px; }
+  .weaponWrap { display: flex; flex-direction: column; width: min(1200px, 100%); max-width: 100%; min-height: 0; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: hidden; padding: 0; text-align: left; background: rgba(25,20,13,.94); }
+  .weaponWrap > .menuHead { flex: 0 0 auto; margin: 0; padding: 18px 24px; border-bottom: 1px solid var(--panel-line); }
+  .weaponScroll { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; min-height: 0; padding: 18px 24px 24px; scroll-padding-block: 12px; }
+  .weaponIntro { font-size: 14px; line-height: 1.75; color: #eee0c9; margin-bottom: 10px; }
+  .subscriptionRules { margin-bottom: 9px; font-size: 13px; line-height: 1.8; color: rgba(255,255,255,.8); }
+  .subscriptionRules strong { color: #ffe4a6; }
+  #weaponStatus { border-left: 3px solid var(--duck-yellow); padding: 8px 12px; background: rgba(255,217,94,.06); margin-block: 12px; font-size: 13px; line-height: 1.75; color: #ffe4a6; font-variant-numeric: tabular-nums; }
+  #weaponStatus.metered { border-color: #ffb08b; color: #ffceb5; }
+  .protectionSummary { padding: 12px 14px; border: 1px solid rgba(255,255,255,.13); border-radius: 10px; margin-bottom: 18px; background: rgba(0,0,0,.15); }
+  #weaponRisk { margin-bottom: 10px; font-size: 13px; line-height: 1.7; color: #f3d3b1; }
+  .fictionNote { margin-top: 8px; font-size: 12px; line-height: 1.65; color: rgba(255,255,255,.7); }
+  #weaponGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  .weaponCard { min-width: 0; position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 12px; border: 1px solid rgba(255,255,255,.2); border-top: 3px solid var(--gun-accent); border-radius: 12px; background: rgba(255,255,255,.045); color: #fff; font-family: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: background .15s, border-color .15s; scroll-margin-block: 10px; }
+  .weaponCard:hover, .weaponCard:focus-visible { background: rgba(255,255,255,.09); border-color: var(--gun-accent); }
   .weaponCard.equipped { background: rgba(255,217,94,.08); border-color: var(--duck-yellow); }
-  .weaponArt { display: flex; align-items: center; justify-content: center; height: 86px; border-radius: 8px; background: radial-gradient(ellipse, rgba(255,255,255,.08), transparent 70%); }
-  .weaponArt canvas { width: 92px; height: 92px; max-width: 100%; filter: drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
-  .weaponName { display: block; font-size: 18px; font-weight: 900; line-height: 1.35; }
-  .weaponTag { display: block; font-size: 10px; line-height: 1.6; color: rgba(255,255,255,.6); }
-  .weaponStats { display: flex; flex-direction: column; gap: 5px; margin-block: 6px 9px; font-size: 11px; color: rgba(255,255,255,.6); }
-  .weaponStats > span { display: flex; justify-content: space-between; gap: 4px; }
-  .weaponStats b { color: rgba(255,255,255,.9); font-weight: 700; font-variant-numeric: tabular-nums; }
-  .weaponFoot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; margin-top: auto; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); font-size: 11px; }
-  .weaponPrice { color: var(--duck-yellow); font-variant-numeric: tabular-nums; }
-  .weaponAction { padding: 4px 10px; border-radius: 6px; background: var(--gun-accent); color: #fff; font-weight: 800; }
-  .weaponCard.equipped .weaponAction { background: var(--duck-yellow); color: var(--ink); }
-  .weaponCard.cant .weaponAction { background: rgba(255,255,255,.1); color: rgba(255,255,255,.65); }
+  .weaponArt { display: flex; align-items: center; justify-content: center; height: 64px; border-radius: 8px; background: radial-gradient(ellipse, rgba(255,255,255,.08), transparent 70%); }
+  .weaponArt canvas { width: 76px; height: 76px; max-width: 100%; filter: drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
+  .weaponName { display: block; font-size: 21px; font-weight: 900; line-height: 1.3; }
+  .weaponTag { display: block; font-size: 12px; line-height: 1.65; color: rgba(255,255,255,.76); }
+  .weaponStats { display: flex; flex-direction: column; gap: 8px; margin-block: 5px; font-size: 12px; line-height: 1.5; color: rgba(255,255,255,.75); }
+  .weaponStats > span { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px; }
+  .weaponStats b { color: #fff2d9; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .weaponCombat { display: block; font-size: 12px; line-height: 1.7; color: rgba(255,255,255,.78); }
+  .weaponReference { display: flex; flex-direction: column; gap: 3px; padding-block: 9px; border-top: 1px solid rgba(255,255,255,.1); font-size: 12px; line-height: 1.6; color: rgba(255,255,255,.7); }
+  .weaponIndex { color: #e6dabd; }
+  .weaponFoot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: auto; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); font-size: 13px; }
+  .weaponPrice { color: var(--duck-yellow); font-variant-numeric: tabular-nums; font-weight: 800; }
+  .weaponAction { width: 100%; padding: 7px 9px; border: 1px solid var(--gun-accent); border-radius: 6px; background: rgba(255,255,255,.06); color: #fff1d5; text-align: center; font-weight: 800; }
+  .weaponCard.equipped .weaponAction { background: var(--duck-yellow); border-color: var(--duck-yellow); color: var(--ink); }
+  .weaponCard.cant .weaponAction { background: rgba(255,255,255,.03); border-color: rgba(255,255,255,.2); color: rgba(255,255,255,.7); }
+  #weaponReferences { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--panel-line); font-size: 12px; line-height: 1.8; color: rgba(255,255,255,.76); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+  #weaponReferences summary { cursor: pointer; color: #ffe0a1; font-size: 13px; padding-block: 4px; }
+  #weaponReferences p, #weaponReferences ul { margin-top: 10px; }
+  #weaponReferences ul { padding-left: 18px; }
+  #weaponReferences li { margin-bottom: 8px; }
+  #weaponReferences a { color: #b3d8ff; text-underline-offset: 3px; }
+  #weaponReferences a:focus-visible, #weaponReferences summary:focus-visible { outline: 2px solid var(--duck-yellow); outline-offset: 3px; }
+  .deathReason { margin-top: 16px; font-size: 13px; line-height: 1.8; color: #e4d4bb; }
+  .deathReason.ban { color: #ffc4ac; }
   #gameoverScreen h1.title { color: var(--danger); text-shadow: 0 5px 0 #6d130c, 0 10px 30px rgba(0,0,0,.6); font-size: 54px; }
-  .resultGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 26px; }
+  .resultGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
   .resultGrid .cell { padding: 14px 6px; border-radius: 14px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); }
-  .resultGrid b { display: block; font-size: 28px; font-weight: 900; color: var(--duck-yellow); font-variant-numeric: tabular-nums; }
+  .resultGrid b { display: block; font-size: 26px; font-weight: 900; color: var(--duck-yellow); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .resultGrid span { font-size: 11px; letter-spacing: .2em; color: rgba(255,255,255,.6); }
   #recordBadge { display: inline-block; margin-top: 18px; padding: 6px 26px; border-radius: 999px; background: linear-gradient(180deg, #ffe28a, var(--duck-orange)); color: var(--ink); font-weight: 900; letter-spacing: .3em; animation: bob 1.6s ease-in-out infinite; }
   #recordBadge.hidden { display: none; }
@@ -307,40 +339,74 @@
   .bookEmpty { grid-column: 1/-1; text-align: center; padding: 40px 10px; font-size: 13px; letter-spacing: .1em; color: rgba(255,255,255,.5); }
 
   /* 自定义滚动条 */
-  .weaponWrap::-webkit-scrollbar, .bookWrap::-webkit-scrollbar, .draftWrap::-webkit-scrollbar { width: 8px; }
-  .weaponWrap::-webkit-scrollbar-thumb, .bookWrap::-webkit-scrollbar-thumb, .draftWrap::-webkit-scrollbar-thumb { background: rgba(255,217,94,.35); border-radius: 4px; }
-  .weaponWrap::-webkit-scrollbar-thumb:hover, .bookWrap::-webkit-scrollbar-thumb:hover, .draftWrap::-webkit-scrollbar-thumb:hover { background: rgba(255,217,94,.6); }
-  .weaponWrap::-webkit-scrollbar-track, .bookWrap::-webkit-scrollbar-track, .draftWrap::-webkit-scrollbar-track { background: rgba(0,0,0,.2); }
+  .weaponScroll::-webkit-scrollbar, .bookWrap::-webkit-scrollbar, .draftWrap::-webkit-scrollbar { width: 8px; }
+  .weaponScroll::-webkit-scrollbar-thumb, .bookWrap::-webkit-scrollbar-thumb, .draftWrap::-webkit-scrollbar-thumb { background: rgba(255,217,94,.35); border-radius: 4px; }
+  .weaponScroll::-webkit-scrollbar-thumb:hover, .bookWrap::-webkit-scrollbar-thumb:hover, .draftWrap::-webkit-scrollbar-thumb:hover { background: rgba(255,217,94,.6); }
+  .weaponScroll::-webkit-scrollbar-track, .bookWrap::-webkit-scrollbar-track, .draftWrap::-webkit-scrollbar-track { background: rgba(0,0,0,.2); }
 
-  /* 窄屏：武器两列、强化卡纵向压缩，菜单内容可滚动且不横向溢出 */
+  @media (max-width: 1100px) {
+    #weaponGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #hintPanel { display: none; }
+    #skillBar { left: 18px; transform: none; }
+  }
+  /* 只压缩布局，不压缩订阅说明；返回按钮不属于滚动区域。 */
+  @media (max-width: 800px) {
+    #weaponGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
   @media (max-width: 720px) {
-    .weaponWrap, .bookWrap { padding: 18px 14px; width: calc(100vw - 32px); }
-    #weaponGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .weaponCard { padding: 10px; gap: 5px; }
-    .weaponArt { height: 48px; }
-    .weaponArt canvas { width: 64px; height: 64px; }
-    .weaponName { font-size: 16px; }
-    .weaponTag { font-size: 9px; }
-    .weaponStats { font-size: 10px; gap: 3px; margin-block: 3px 5px; }
-    .weaponFoot { font-size: 10px; padding-top: 7px; }
-    .weaponAction { padding: 3px 7px; }
+    .bookWrap { padding: 18px 16px; width: 100%; }
     .menuHead { gap: 10px; margin-bottom: 14px; }
     .menuTitle { font-size: 23px; }
-    .menuHead .btn.ghost { padding: 8px 12px; }
-    .weaponIntro { font-size: 11px; margin-bottom: 12px; }
-    #weaponScreen .menuHead .btn { margin-left: auto; }
+    .menuHead .btn.ghost { padding: 10px 12px; }
     #cardBookGrid { grid-template-columns: minmax(0, 1fr); }
     .cardRow { flex-direction: column; align-items: center; gap: 9px; }
-    .pickCard { width: min(340px, 92vw); padding: 11px 14px 9px; gap: 4px; }
+    .pickCard { width: min(340px, 100%); padding: 11px 14px 9px; gap: 4px; }
     .pickCard .art { width: 54px; height: 54px; margin-top: 2px; }
     .pickCard .cname { font-size: 18px; }
     .pickCard .cdesc { min-height: 0; font-size: 12.5px; line-height: 1.5; }
     .pickCard .cfoot { margin-top: 2px; padding-top: 6px; }
     .draftHead { margin-bottom: 12px; }
-    .draftWrap { padding-top: 14px; }
+    .draftWrap { width: 100%; padding-top: 14px; }
     .draftOwned { margin-top: 12px; padding-top: 10px; }
-    #statsPanel { gap: 12px; padding: 8px 12px; }
-    #statsPanel .stat b { font-size: 17px; }
+    #playerPanel { top: 16px; left: 16px; right: 16px; min-width: 0; padding: 10px 12px; }
+    #playerPanel .bars { min-width: 0; }
+    #statsPanel { top: 136px; left: 16px; right: 16px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; padding: 8px 12px; }
+    #statsPanel .stat { min-width: 0; }
+    #statsPanel .stat b { font-size: 17px; overflow-wrap: anywhere; }
+    #killfeed { top: 212px; max-width: calc(100% - 32px); right: 16px; }
+    .feed { max-width: 100%; overflow-wrap: anywhere; }
+    #waveBanner { width: calc(100% - 32px); top: 31%; }
+    #waveBanner .main { font-size: 38px; }
+    #toast, #alertBanner { max-width: calc(100% - 32px); padding-inline: 16px; letter-spacing: .04em; white-space: normal; text-align: center; }
+  }
+  @media (max-width: 600px) {
+    .weaponWrap > .menuHead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 14px 16px; }
+    #weaponTitle { grid-column: 1; }
+    #weaponClose { grid-column: 2; grid-row: 1; }
+    #weaponScreen .menuCounter { grid-column: 1 / -1; margin-left: 0; }
+    .weaponScroll { padding: 16px; }
+    #weaponGrid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+    .weaponCard { padding: 16px; gap: 9px; }
+    .weaponStats, .weaponCombat, .weaponTag, .weaponReference { font-size: 13px; }
+    .weaponAction { font-size: 14px; padding-block: 9px; }
+    .protectionSummary { padding: 12px; }
+    #weaponProtections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    #subscriptionPanel { right: 16px; bottom: 16px; width: calc(100% - 32px); padding: 10px 12px; }
+    #skillBar { left: 16px; bottom: 218px; gap: 8px; }
+    #skillBar .slot { width: 48px; height: 48px; }
+    #statsPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 10px; }
+    #statsPanel .stat b { font-size: 16px; }
+    h1.title { font-size: 42px; letter-spacing: .1em; }
+    #gameoverScreen h1.title, #pauseScreen h1.title { font-size: 34px; letter-spacing: .06em; }
+    .subtitle { font-size: 12px; letter-spacing: .1em; line-height: 1.8; overflow-wrap: anywhere; }
+    .logo { width: 104px; height: 104px; }
+    .card { padding: 22px 16px; }
+    .btn { padding: 13px 30px; max-width: 100%; font-size: 18px; letter-spacing: .16em; }
+    .btn.ghost { margin-left: 0; }
+    .volRow { flex-wrap: wrap; }
+    .resultGrid { gap: 8px; }
+    .resultGrid b { font-size: 21px; }
+    .resultGrid span { letter-spacing: .02em; }
   }
   @media (prefers-reduced-motion: reduce) {
     .pickCard, .pickCard.gold { animation: dealIn .01s forwards; }
@@ -390,27 +456,28 @@
     <div class="tip" id="waveTip">掠夺者正在逼近农场…</div>
   </div>
 
-  <div id="ammoPanel" class="panel">
-    <div class="ammoRow">
-      <canvas id="gunIcon" width="64" height="64"></canvas>
-      <div class="ammoCol">
-        <div class="weapon" id="weaponName">Claude 步枪</div>
-        <div class="nums"><span id="mag">24</span><small>/ <span id="reserve">96</span></small></div>
+  <div id="subscriptionPanel" class="panel">
+    <div class="subscriptionRow">
+      <canvas id="gunIcon" width="64" height="64" aria-hidden="true"></canvas>
+      <div class="subscriptionCol">
+        <div class="subscriptionHeading"><span id="weaponName">尚未订阅</span><span id="subscriptionStatus">等待选择</span></div>
+        <div class="tokenNums"><span id="tokensRemaining">0</span><small>/ <span id="tokensGranted">0</span> Token</small></div>
       </div>
     </div>
-    <div id="reloadHint"></div>
-    <div id="reloadBar"><i id="reloadFill"></i></div>
+    <div id="usageHint">选择订阅后开始 · 主动技能不耗 Token</div>
+    <div id="banRisk">虚构封号风险 0% / 次调用</div>
+    <div id="protectionCounts" class="protectionCounts" aria-label="本局保护道具"></div>
   </div>
 
   <div id="hintPanel" class="panel">
-    <b>WASD</b>移动 <b>左键</b>射击 <b>空格</b>冲刺 <b>R</b>换弹 <b>1-4</b>技能 <b>B</b>武器 <b>T</b>图鉴
+    <b>WASD</b>移动 <b>左键</b>调用 <b>空格</b>冲刺 <b>1-4 / 十字键</b>技能 <b>B</b>订阅 <b>T</b>图鉴
   </div>
 
   <div id="skillBar">
-    <div class="slot locked" data-skill="storm"><span class="key">1</span><span class="icon">嘎</span><i class="cd"></i><span class="cdText"></span></div>
-    <div class="slot locked" data-skill="shield"><span class="key">2</span><span class="icon">蹲</span><i class="cd"></i><span class="cdText"></span></div>
-    <div class="slot locked" data-skill="rage"><span class="key">3</span><span class="icon">温</span><i class="cd"></i><span class="cdText"></span></div>
-    <div class="slot locked" data-skill="slow"><span class="key">4</span><span class="icon">停</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="storm"><span class="key" title="键盘 1 / 手柄十字键上">1 / ↑</span><span class="icon">嘎</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="shield"><span class="key" title="键盘 2 / 手柄十字键右">2 / →</span><span class="icon">蹲</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="rage"><span class="key" title="键盘 3 / 手柄十字键下">3 / ↓</span><span class="icon">温</span><i class="cd"></i><span class="cdText"></span></div>
+    <div class="slot locked" data-skill="slow"><span class="key" title="键盘 4 / 手柄十字键左">4 / ←</span><span class="icon">停</span><i class="cd"></i><span class="cdText"></span></div>
   </div>
 
   <div id="killfeed"></div>
@@ -440,6 +507,7 @@
     </svg>
     <h1 class="title">守卫鸭鸭</h1>
     <div class="subtitle">GUARD DUCK · 黄昏农场生存战</div>
+    <p class="desc">选一份虚构订阅，用 Token 火力守住农场。<br>仅为本地游戏，不接入真实账号、支付或身份验证。</p>
     <div class="qualityRow">画质
       <button data-q="high" class="sel">极致</button>
       <button data-q="medium">均衡</button>
@@ -466,8 +534,9 @@
 
 <div id="gameoverScreen" class="overlay hidden" inert>
   <div class="card">
-    <h1 class="title">鸭鸭倒下了</h1>
+    <h1 class="title" id="overTitle">鸭鸭倒下了</h1>
     <div class="subtitle" id="overSub">农场失守…但羽毛仍在风中飘扬</div>
+    <p class="deathReason" id="overReason">死亡原因：战斗阵亡。</p>
     <div id="recordBadge" class="hidden">新纪录！</div>
     <div class="resultGrid">
       <div class="cell"><b id="resWave">0</b><span>存活波次</span></div>
@@ -477,22 +546,35 @@
       <div class="cell"><b id="resTime">0:00</b><span>存活时间</span></div>
       <div class="cell"><b id="resCoins">0</b><span>金币收入</span></div>
       <div class="cell"><b id="resBest">0</b><span>历史最佳</span></div>
+      <div class="cell"><b id="resCalls">0</b><span>成功调用</span></div>
+      <div class="cell"><b id="resTokensUsed">0</b><span>Token 用量</span></div>
     </div>
     <button class="btn" id="retryBtn">再次守卫</button>
     <button class="btn ghost" id="titleBtn">回到标题</button>
   </div>
 </div>
 
-<div id="weaponScreen" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="weaponTitle" inert>
+<div id="weaponScreen" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="weaponTitle" aria-describedby="weaponIntro" inert>
   <div class="weaponWrap panel">
     <div class="menuHead">
-      <div class="menuTitle" id="weaponTitle">AI 武器库</div>
-      <div class="menuCounter">金币<b id="weaponCoins">0</b></div>
-      <button type="button" class="btn ghost" id="weaponClose">返回战斗 (B)</button>
+      <div class="menuTitle" id="weaponTitle">AI 订阅</div>
+      <div class="menuCounter">可用金币<b id="weaponCoins">0</b></div>
+      <button type="button" class="btn ghost" id="weaponClose">回到标题 (Esc)</button>
     </div>
-    <p class="weaponIntro">把工资变成火力。选一把模型枪，购入即装备。</p>
-    <div id="weaponGrid"></div>
-    <div class="menuFoot">仅展示武器基础数值 · 强化卡对所有枪生效<br>福利拾取即结算 · Q / E 或滚轮切枪 · 面板打开时战斗暂停</div>
+    <div class="weaponScroll">
+      <p class="weaponIntro" id="weaponIntro">先手动确认一项订阅，再开始守卫。</p>
+      <p class="subscriptionRules"><strong>切换立即扣目标全额波费，旧 Token 作废；切回也收费。</strong>点击当前计划不扣款、不补额度。</p>
+      <p class="subscriptionRules">每波续费并刷新额度，旧额不累积；续费失败保留模型、转为按量，本波不自动重扣。波间切换为预付下一波。扩展配额卡只影响之后的发放；主动技能只看冷却。</p>
+      <p id="weaponStatus" role="status" aria-live="polite">尚未订阅 · 战斗冻结</p>
+      <div class="protectionSummary">
+        <p id="weaponRisk">封号概率仅为虚构游戏平衡值，不是现实平台规则。</p>
+        <div id="weaponProtections" class="protectionCounts" aria-label="整局持有的保护道具"></div>
+        <p class="fictionNote">以上均是可叠加的游戏道具，不生成或采集真实手机号、信用卡、IP、账号或 KYC 资料。</p>
+      </div>
+      <div id="weaponGrid"></div>
+      <div class="menuFoot">卡面显示已应用经济强化后的调用用量、之后授予的额度与按量单价。战斗属性为游戏映射，非真实模型测试结果。<br>方向键 / Tab 移动焦点 · 原生 Space / Enter 或手柄 A 确认 · 面板打开时战斗暂停</div>
+      <details id="weaponReferences"></details>
+    </div>
   </div>
 </div>
 

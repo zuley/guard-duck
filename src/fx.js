@@ -150,26 +150,6 @@ export class FX {
     scene.add(this.sparkPts);
     this.sparkIdx = 0;
 
-    // 弹壳
-    const CN = this.caseN = 110;
-    this.caseMesh = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.016, 0.016, 0.055, 6),
-      new THREE.MeshStandardMaterial({ color: 0xd8b04a, roughness: 0.3, metalness: 0.9 }), CN);
-    this.caseMesh.frustumCulled = false;
-    this.caseMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.casePos = new Float32Array(CN * 3);
-    this.caseVel = new Float32Array(CN * 3);
-    this.caseRot = new Float32Array(CN * 3);
-    this.caseRotV = new Float32Array(CN * 3);
-    this.caseLife = new Float32Array(CN);
-    this.caseIdx = 0;
-    this._m4 = new THREE.Matrix4();
-    this._q = new THREE.Quaternion();
-    this._e = new THREE.Euler();
-    this._v = new THREE.Vector3();
-    this._s = new THREE.Vector3();
-    scene.add(this.caseMesh);
-
     // 枪口焰 / 光 / 曳光 / 贴花 / 冲击环 / 数字
     this.flashes = [];
     for (let i = 0; i < 8; i++) {
@@ -295,18 +275,6 @@ export class FX {
     }
   }
 
-  casing(pos, dir) {
-    const i = this.caseIdx; this.caseIdx = (this.caseIdx + 1) % this.caseN;
-    const i3 = i * 3;
-    this.casePos.set([pos.x, pos.y, pos.z], i3);
-    const side = new THREE.Vector3(-dir.z, 0, dir.x);
-    this.caseVel.set([
-      side.x * 2.2 + (Math.random() - 0.5), 2.4 + Math.random() * 1.2, side.z * 2.2 + (Math.random() - 0.5)], i3);
-    this.caseRot.set([Math.random() * 3, Math.random() * 3, Math.random() * 3], i3);
-    this.caseRotV.set([(Math.random() - 0.5) * 18, (Math.random() - 0.5) * 18, (Math.random() - 0.5) * 18], i3);
-    this.caseLife[i] = 5;
-  }
-
   flash(pos, scale = 0.7) {
     const f = this.flashes.find((x) => x.life <= 0) || this.flashes[0];
     f.s.position.copy(pos);
@@ -380,38 +348,6 @@ export class FX {
     sg.attributes.aLife.needsUpdate = true;
     sg.attributes.aColor.needsUpdate = true;
     sg.attributes.aSize.needsUpdate = true;
-
-    for (let i = 0; i < this.caseN; i++) {
-      if (this.caseLife[i] <= 0) {
-        this._m4.makeScale(0, 0, 0);
-        this.caseMesh.setMatrixAt(i, this._m4);
-        continue;
-      }
-      this.caseLife[i] -= dt;
-      const i3 = i * 3;
-      this.caseVel[i3 + 1] -= 14 * dt;
-      this.casePos[i3] += this.caseVel[i3] * dt;
-      this.casePos[i3 + 1] += this.caseVel[i3 + 1] * dt;
-      this.casePos[i3 + 2] += this.caseVel[i3 + 2] * dt;
-      const gh = groundHeight(this.casePos[i3], this.casePos[i3 + 2]) + 0.02;
-      if (this.casePos[i3 + 1] < gh) {
-        this.casePos[i3 + 1] = gh;
-        this.caseVel[i3 + 1] *= -0.32;
-        this.caseVel[i3] *= 0.6; this.caseVel[i3 + 2] *= 0.6;
-        this.caseRotV[i3] *= 0.5; this.caseRotV[i3 + 1] *= 0.5; this.caseRotV[i3 + 2] *= 0.5;
-      }
-      this.caseRot[i3] += this.caseRotV[i3] * dt;
-      this.caseRot[i3 + 1] += this.caseRotV[i3 + 1] * dt;
-      this.caseRot[i3 + 2] += this.caseRotV[i3 + 2] * dt;
-      const s = Math.min(1, this.caseLife[i] / 0.5);
-      this._e.set(this.caseRot[i3], this.caseRot[i3 + 1], this.caseRot[i3 + 2]);
-      this._q.setFromEuler(this._e);
-      this._v.set(this.casePos[i3], this.casePos[i3 + 1], this.casePos[i3 + 2]);
-      this._s.setScalar(s);
-      this._m4.compose(this._v, this._q, this._s);
-      this.caseMesh.setMatrixAt(i, this._m4);
-    }
-    this.caseMesh.instanceMatrix.needsUpdate = true;
 
     for (const f of this.flashes) {
       if (f.life > 0) { f.life -= dt; f.s.material.opacity = Math.max(0, f.life / 0.06); if (f.life <= 0) f.s.visible = false; }

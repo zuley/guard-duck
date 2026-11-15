@@ -52,6 +52,7 @@ const send = (method, params = {}) => new Promise((res) => {
 
 async function ev(expression) {
   const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  if (r.error) throw new Error('CDP Runtime.evaluate: ' + JSON.stringify(r.error));
   if (r.result.exceptionDetails)
     throw new Error('eval: ' + JSON.stringify(r.result.exceptionDetails.exception?.description || r.result.exceptionDetails));
   return r.result.result.value;
@@ -89,18 +90,28 @@ async function waitGame(sec, timeoutMs = 180000) {
     if (s.t - t0 >= sec) return true;
     await sleep(200);
   }
-  return false;
+  throw new Error('waitGame timeout: ' + sec + 's, state=' + await ev('window.__game.state'));
 }
 
 // 页面内测试工具：走游戏自身的清理路径，避免残留网格污染 GPU 资源计数
 const HELPERS = `
 window.__T = {
-  // 挂起出怪，让确定性测试不被随机波次打断
-  hold() { const g = window.__game; g.waveState = 'inter'; g.interT = 99999; g.spawnQueue = []; return g; },
+  start(bot = false) { const g = window.__game;
+    g.bot = bot; g.start(); g.banRng = () => 1;
+    if (g.state === 'weapons' && !g.subscribe('ds')) throw new Error('DS onboarding fixture failed');
+    if (g.state !== 'playing') throw new Error('subscribed fixture is not playing');
+    return g;
+  },
+  resolveDraft() { const g = window.__game;
+    if (g.state === 'card') g.pickCard(g.cardDraft[0].id);
+  },
+  // 挂起出怪，让确定性测试不被随机波次打断；先真正选完待处理的卡。
+  hold() { const g = window.__game; this.resolveDraft(); g.banRng = () => 1;
+    g.waveState = 'inter'; g.interT = 99999; g.spawnQueue = []; return g; },
   // 在开阔地摆一排静止靶子（暂清碰撞体，确保弹道不被木箱挡住）
   line(n, z0, dz, hp) { const g = window.__game;
     this.hold();
-    g.clearField(); this.hold();
+    window.__T.resolveDraft(); g.clearField(); this.hold();
     if (!g.plan) g.nextWave();
     this.hold();
     window.__cols = g.world.colliders; g.world.colliders = [];
@@ -121,8 +132,8 @@ window.__T = {
 async function clearWave() {
   await ev(`(() => { const g = window.__game;
     if (g.state === 'card') return 1;
-    if (!g.plan) g.nextWave();
-    g.clearField(); g.spawnQueue = []; g.waveState = 'fight';
+    if (!g.plan || g.waveState === 'inter') g.nextWave();
+    window.__T.resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'fight';
     g.updateWaves(0.016);
     return 1; })()`);
   for (let i = 0; i < 40; i++) {
@@ -158,7 +169,7 @@ try {
     JSON.stringify(c1));
 
   // ---------- C2 波次肃清弹出三张卡 ----------
-  await ev('window.__game.start()');
+  await ev('window.__T.start(); 1'); // 不把含循环引用的 Game 对象按值传回 CDP。
   await waitGame(0.4);
   const got = await clearWave();
   const c2 = await ev(`(() => { const g = window.__game;
@@ -241,17 +252,89 @@ try {
   // ---------- C9 属性卡真实改写战斗数值 ----------
   const c9 = await ev(`(() => { const g = window.__game;
     __T.hold(); g.cards = {}; g.cardHistory = []; g.recomputeLoadout();
-    const base = { dmg: g.loadout.damage, hp: g.loadout.maxHp, rpm: g.loadout.rpm, mag: g.loadout.magSize, spd: g.loadout.speedMul };
+    const base = { dmg: g.loadout.damage, hp: g.loadout.maxHp, rpm: g.loadout.rpm,
+      quotaMul: g.loadout.quotaMul, spd: g.loadout.speedMul, tokens: g.tokens, granted: g.quotaGranted };
     const step = {};
-    for (const [k, id] of [['dmg','c_dmg'],['hp','c_hp'],['rpm','c_rate'],['mag','c_mag'],['spd','c_speed']]) {
+    for (const [k, id] of [['dmg','c_dmg'],['hp','c_hp'],['rpm','c_rate'],['quota','c_mag'],['spd','c_speed']]) {
       g.cards[id] = 1; g.recomputeLoadout();
-      step[k] = { dmg: g.loadout.damage, hp: g.loadout.maxHp, rpm: g.loadout.rpm, mag: g.loadout.magSize, spd: g.loadout.speedMul };
+      step[k] = { dmg: g.loadout.damage, hp: g.loadout.maxHp, rpm: g.loadout.rpm,
+        quotaMul: g.loadout.quotaMul, spd: g.loadout.speedMul, tokens: g.tokens, granted: g.quotaGranted };
     }
     return { base, step, playerHpSync: g.p.maxHp === g.loadout.maxHp }; })()`);
-  check('C9', '属性卡生效：伤害/血量/射速/弹匣/移速真实提升且同步玩家上限',
+  check('C9', '属性卡真实提升伤害/血量/射速/移速；扩展配额只改未来倍率不补发',
     c9.step.dmg.dmg > c9.base.dmg && c9.step.hp.hp === c9.base.hp + 25 && c9.step.rpm.rpm > c9.base.rpm
-    && c9.step.mag.mag > c9.base.mag && c9.step.spd.spd > c9.base.spd && c9.playerHpSync,
+    && c9.step.quota.quotaMul === 1.25 && c9.step.quota.tokens === c9.base.tokens
+    && c9.step.quota.granted === c9.base.granted && c9.step.spd.spd > c9.base.spd && c9.playerHpSync,
     JSON.stringify(c9));
+
+  // ---------- C9b-e 四张经济卡通过真实卡片点击与战斗/续费生效 ----------
+  async function pickKnown(id) {
+    const shown = await ev(`(async () => { const g = window.__game;
+      const { CARD_BY_ID } = await import('/src/rules.js'); __T.hold();
+      const stacks = g.cards['${id}'] || 0;
+      g.cardDraft = [{ ...CARD_BY_ID['${id}'], stacks, next: stacks + 1 }];
+      g.state = 'card'; g.hud.cardOpen(true); g.hud.renderCards(g);
+      const card = document.querySelector('#cardRow [data-card="${id}"]');
+      return { name: card.querySelector('.cname').textContent, desc: card.querySelector('.cdesc').textContent }; })()`);
+    await clickSel('#cardRow [data-card="' + id + '"]');
+    return shown;
+  }
+  const economicBase = await ev(`(() => { const g = __T.start(); __T.hold(); g.nextWave();
+    window.__T.resolveDraft(); g.clearField(); __T.hold();
+    return { wallet: g.walletMicros, tokens: g.tokens, quota: g.quotaGranted }; })()`);
+  const quotaCard = await pickKnown('c_mag');
+  const quota = await ev(`(() => { const g = window.__game;
+    const picked = { wallet: g.walletMicros, tokens: g.tokens, quota: g.quotaGranted, mul: g.loadout.quotaMul };
+    g.tokens = 13;
+    for (let i = 0; i < 3; i++) { g.recomputeLoadout(); g.openWeapons(); g.closeWeapons(); }
+    const repeated = { wallet: g.walletMicros, tokens: g.tokens, quota: g.quotaGranted };
+    g.nextWave(); const renewed = { wallet: g.walletMicros, tokens: g.tokens, quota: g.quotaGranted, wave: g.wave };
+    g.renewSubscription(g.wave); const once = { wallet: g.walletMicros, tokens: g.tokens };
+    window.__T.resolveDraft(); g.clearField(); __T.hold(); return { picked, repeated, renewed, once }; })()`);
+  check('C9b', '扩展配额真实选卡：当前额度/重算/开关面板不补发，下波只发一次 2500 Token',
+    quotaCard.name.includes('扩展配额') && quota.picked.mul === 1.25
+    && quota.picked.wallet === economicBase.wallet && quota.picked.tokens === economicBase.tokens
+    && quota.picked.quota === economicBase.quota && quota.repeated.tokens === 13
+    && quota.repeated.quota === economicBase.quota && quota.repeated.wallet === economicBase.wallet
+    && quota.renewed.wave === 2 && quota.renewed.tokens === 2500 && quota.renewed.quota === 2500
+    && quota.renewed.wallet === economicBase.wallet - 15_000_000
+    && quota.once.wallet === quota.renewed.wallet && quota.once.tokens === 2500,
+    JSON.stringify({ card: quotaCard, economicBase, quota }));
+  const tokenCard = await pickKnown('c_reload');
+  const tokenUse = await ev(`(() => { const g = window.__game;
+    const before = { wallet: g.walletMicros, tokens: g.tokens, used: g.tokensUsed, calls: g.calls };
+    g.p.fireT = 0; g.fire(); return { before, tokens: g.tokens, used: g.tokensUsed, calls: g.calls, wallet: g.walletMicros }; })()`);
+  check('C9c', 'Token 优化真实选卡后，每次调用用量向上取整为 29，未产生换弹',
+    /Token\s*优化/.test(tokenCard.name) && tokenUse.tokens === tokenUse.before.tokens - 29
+    && tokenUse.used === tokenUse.before.used + 29 && tokenUse.calls === tokenUse.before.calls + 1
+    && tokenUse.wallet === tokenUse.before.wallet, JSON.stringify({ card: tokenCard, tokenUse }));
+  const budgetBefore = await ev('({ wallet: window.__game.walletMicros, earned: window.__game.coinsEarned })');
+  const budgetCard = await pickKnown('c_ammo');
+  const budget = await ev(`(() => { const g = window.__game;
+    const picked = { wallet: g.walletMicros, earned: g.coinsEarned };
+    g.pickCard('c_ammo'); g.recomputeLoadout();
+    const repeated = { wallet: g.walletMicros, earned: g.coinsEarned };
+    g.tokens = 0; g.p.fireT = 0; const quote = g.usageQuote(); g.fire();
+    return { picked, repeated, wallet: g.walletMicros, tokens: g.tokens, quote }; })()`);
+  check('C9d', '预算补贴只即时发放一次 30 金币，之后仅按量单价打九折（29 Token 扣 0.254475）',
+    budgetCard.name.includes('预算补贴') && budget.picked.wallet === budgetBefore.wallet + 30_000_000
+    && budget.picked.earned === budgetBefore.earned + 30 && budget.repeated.wallet === budget.picked.wallet
+    && budget.repeated.earned === budget.picked.earned && budget.quote.tokens === 29 && budget.quote.rateMicros === 8775
+    && budget.quote.costMicros === 254475 && budget.wallet === budget.picked.wallet - 254475 && budget.tokens === 0,
+    JSON.stringify({ card: budgetCard, budgetBefore, budget }));
+  const cashbackCard = await pickKnown('r_ammoBack');
+  const cashback = await ev(`(() => { const g = window.__game; window.__T.resolveDraft(); g.clearField(); __T.hold();
+    const rng = g.rng; g.rng = () => 0; // 确定性命中返现，不替换独立封号 RNG。
+    g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
+    e.pos.set(3, 0, 3); e.duck.group.position.copy(e.pos);
+    const before = { wallet: g.walletMicros, earned: g.coinsEarned, kills: g.kills };
+    g.killEnemy(e); g.killEnemy(e); g.rng = rng;
+    const out = { before, wallet: g.walletMicros, earned: g.coinsEarned, kills: g.kills, chance: g.loadout.mods.cashback };
+    window.__T.resolveDraft(); g.clearField(); __T.hold(); return out; })()`);
+  check('C9e', '消费返现一层为 25% 几率 +4 金币，真实击杀只发一次基础工资与返现',
+    cashbackCard.name.includes('消费返现') && cashback.chance === 0.25
+    && cashback.wallet === cashback.before.wallet + 12_000_000 && cashback.earned === cashback.before.earned + 12
+    && cashback.kills === cashback.before.kills + 1, JSON.stringify({ card: cashbackCard, cashback }));
 
   // ---------- C10 稀有度分布 + Boss 波保底金 ----------
   const c10 = await ev(`(async () => { const { rollCards, mulberry32, CARD_RARITIES } = await import('/src/rules.js');
@@ -343,7 +426,7 @@ try {
     const hp0 = e.hp; g.updateEnemies(0.5);
     const burned = e.hp < hp0;
     // 穿透：一发子弹连续穿过多个敌人
-    g.p.mag = 24; g.p.fireT = 0; g.p.heat = 0; g.p.moving = false;
+    g.p.fireT = 0; g.p.heat = 0; g.p.moving = false;
     g.aimPoint.set(0, 0.7, -9);
     const orig = g.spreadNow; g.spreadNow = () => 0;
     g.fire();
@@ -364,7 +447,7 @@ try {
     JSON.stringify(c14));
 
   // ---------- C15 传说特效：不死鸟 ----------
-  await ev('window.__game.start()');
+  await ev('window.__T.start(); 1'); // 不把含循环引用的 Game 对象按值传回 CDP。
   await waitGame(0.3);
   const c15 = await ev(`(() => { const g = window.__game;
     __T.hold();
@@ -381,7 +464,7 @@ try {
     JSON.stringify(c15));
 
   // ---------- C16 传说特效：守护结界 + 荆棘反伤 ----------
-  await ev('window.__game.start()');
+  await ev('window.__T.start(); 1'); // 不把含循环引用的 Game 对象按值传回 CDP。
   await waitGame(0.3);
   const c16 = await ev(`(() => { const g = window.__game;
     g.cards = { g_guardian: 2, r_thorns: 2 }; g.recomputeLoadout();
@@ -400,7 +483,7 @@ try {
   await ev('__T.unline()');
 
   // ---------- C17 图鉴：T 打开、排序、层数、关闭 ----------
-  await ev('window.__game.start()');
+  await ev('window.__T.start(); 1'); // 不把含循环引用的 Game 对象按值传回 CDP。
   await waitGame(0.3);
   await ev(`(() => { const g = window.__game; __T.hold();
     g.cards = { c_dmg: 2, r_frost: 1, g_chain: 1 };
@@ -429,7 +512,7 @@ try {
     `time ${bf0.toFixed(2)}→${bf1.toFixed(2)}, state=${c17b}`);
 
   // ---------- C18 连续 6 波抽卡循环稳定 ----------
-  await ev('window.__game.start()');
+  await ev('window.__T.start(); 1'); // 不把含循环引用的 Game 对象按值传回 CDP。
   await waitGame(0.3);
   const loop = [];
   for (let w = 0; w < 6; w++) {
@@ -449,10 +532,11 @@ try {
   const allThree = loop.every((l) => l.ids && l.ids.length === 3 && new Set(l.ids).size === 3);
   const allResumed = loop.every((l) => l.state === 'playing');
   const totalsOk = loop.every((l, i) => l.total === i + 1 && l.hist === i + 1);
+  const wavesOk = loop.every((l, i) => l.wave === i + 1);
   const geoGrow = loop.length ? loop[loop.length - 1].geo - loop[0].geo : 999;
   check('C18', '连续 6 波抽卡→选卡→复战循环稳定，层数正确、GPU 资源不累积',
-    loop.length === 6 && allThree && allResumed && totalsOk && geoGrow <= 12,
-    JSON.stringify({ rounds: loop.length, allThree, allResumed, totalsOk, geoGrow, last: loop[loop.length - 1] }));
+    loop.length === 6 && allThree && allResumed && totalsOk && wavesOk && geoGrow <= 12,
+    JSON.stringify({ rounds: loop.length, allThree, allResumed, totalsOk, wavesOk, geoGrow, last: loop[loop.length - 1] }));
 
   // ---------- C19 满层卡退出卡池 ----------
   const c19 = await ev(`(async () => { const { rollCards, CARDS, CARD_BY_ID, mulberry32 } = await import('/src/rules.js');
@@ -467,7 +551,7 @@ try {
   // 卡池抽空时肃清不卡死：回退为普通提示并继续下一波
   const c19b = await ev(`(async () => { const g = window.__game; const { CARDS } = await import('/src/rules.js');
     g.cards = Object.fromEntries(CARDS.map(c => [c.id, c.max])); g.recomputeLoadout();
-    g.clearField(); g.spawnQueue = []; g.waveState = 'fight'; g.updateWaves(0.016);
+    window.__T.resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'fight'; g.updateWaves(0.016);
     return { state: g.state, waveState: g.waveState, offered: !!g.cardDraft }; })()`);
   check('C19b', '卡池抽空时肃清直接跳过选卡，流程不卡死',
     c19b.state === 'playing' && c19b.waveState === 'inter' && !c19b.offered, JSON.stringify(c19b));
@@ -477,7 +561,7 @@ try {
     g.cardHistory = ['g_orbit', 'c_dmg']; g.recomputeLoadout(); g.syncOrbit(); return 1; })()`);
   await waitGame(0.3);
   const preReset = await ev('window.__game.orbitals.length');
-  await ev('window.__game.start()');
+  await ev('window.__T.start(); 1'); // 不把含循环引用的 Game 对象按值传回 CDP。
   await waitGame(0.3);
   const c20 = await ev(`(() => { const g = window.__game;
     return { cards: Object.keys(g.cards).length, hist: g.cardHistory.length, orbit: g.orbitals.length,
@@ -509,7 +593,7 @@ try {
   await send('Emulation.setDeviceMetricsOverride', { width: 400, height: 780, deviceScaleFactor: 1, mobile: true });
   await sleep(700);
   await ev(`(() => { const g = window.__game; g.bot = false;
-    if (g.state !== 'playing') g.start();
+    if (g.state !== 'playing') window.__T.start(g.bot);
     __T.hold(); return 1; })()`);
   await clearWave();
   await sleep(1000);

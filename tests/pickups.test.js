@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdditiveBlending, Texture } from 'three';
 import { LOOT_ITEMS } from '../src/rules.js';
+import { PROTECTION_ITEMS } from '../src/subscriptions.js';
 import { glowSprite, textTexture } from '../src/textures.js';
 
 // 模型模板只需要贴图尺寸；不创建 canvas、DOM 或 WebGL 上下文。
@@ -16,7 +17,11 @@ vi.mock('../src/textures.js', async () => {
   };
 });
 
-const cases = [...LOOT_ITEMS.map((item) => ['loot', item.id]), ['ammo'], ['health']];
+const cases = [
+  ...LOOT_ITEMS.map((item) => ['loot', item.id]),
+  ...PROTECTION_ITEMS.map((item) => ['protection', item.id]),
+  ['health'],
+];
 const nodesOf = (root) => {
   const nodes = [];
   root.traverse((node) => nodes.push(node));
@@ -45,8 +50,10 @@ beforeEach(async () => {
 });
 
 describe('makePickupVisual 有限共享模板', () => {
-  it('9 种福利和弹药/回血都生成有效模型，福利带正确标签与光晕颜色', () => {
-    expect(cases).toHaveLength(11);
+  it('9 种福利、4 种保护物品与回血均生成有效模型，标签与光晕颜色正确', () => {
+    expect(LOOT_ITEMS).toHaveLength(9);
+    expect(PROTECTION_ITEMS.map((item) => item.id)).toEqual(['us_phone', 'us_credit', 'us_ip', 'kyc']);
+    expect(cases).toHaveLength(14);
     for (const [kind, id] of cases) {
       const visual = makePickupVisual(kind, id);
       const nodes = nodesOf(visual);
@@ -54,15 +61,15 @@ describe('makePickupVisual 有限共享模板', () => {
       expect(visual.parent).toBeNull();
       expect(nodes.some((node) => node.isMesh && node.geometry.attributes.position.count > 0)).toBe(true);
       const sprites = nodes.filter((node) => node.isSprite);
-      expect(sprites).toHaveLength(kind === 'loot' ? 2 : 1);
+      expect(sprites).toHaveLength(kind === 'health' ? 1 : 2);
       for (const sprite of sprites) {
         expect(sprite.material.map).toBeInstanceOf(Texture);
         expect(sprite.material.map.image.width).toBeGreaterThan(0);
         expect(sprite.material.map.image.height).toBeGreaterThan(0);
       }
-      const item = LOOT_ITEMS.find((entry) => entry.id === id);
+      const item = (kind === 'protection' ? PROTECTION_ITEMS : LOOT_ITEMS).find((entry) => entry.id === id);
       const glow = sprites.find((sprite) => sprite.material.blending === AdditiveBlending);
-      expect(glow.material.color.getHex()).toBe(item?.color ?? (kind === 'ammo' ? 0xffd95e : 0xff8070));
+      expect(glow.material.color.getHex()).toBe(item?.color ?? 0xff8070);
       if (item) {
         const label = sprites.find((sprite) => sprite.renderOrder === 1);
         expect(label.material.map.name).toBe(item.label);
@@ -70,8 +77,8 @@ describe('makePickupVisual 有限共享模板', () => {
         expect(textTexture).toHaveBeenCalledWith(item.label, '#' + item.color.toString(16).padStart(6, '0'), 32);
       }
     }
-    expect(glowSprite).toHaveBeenCalledTimes(11);
-    expect(textTexture).toHaveBeenCalledTimes(9);
+    expect(glowSprite).toHaveBeenCalledTimes(14);
+    expect(textTexture).toHaveBeenCalledTimes(13);
   });
 
   it('每种掉落仅主体投射阴影，丝带/杯盖/文字等装饰不投影', () => {
@@ -85,11 +92,14 @@ describe('makePickupVisual 有限共享模板', () => {
     }
   });
 
-  it('未知/缺失 kind 或福利 id（含继承属性名）返回 null，不分配模板资源', () => {
+  it('弹药、未知/缺失 kind 或福利/保护 id（含继承属性名）返回 null，不分配资源', () => {
     for (const [kind, id] of [
-      [undefined], [null], [''], ['unknown', 'subsidy'], ['subsidy'],
+      [undefined], [null], [''], ['unknown', 'subsidy'], ['subsidy'], ['ammo'], ['tokens'],
       ['loot'], ['loot', ''], ['loot', null], ['loot', 'missing'], ['loot', 'neck'],
-      ['loot', 'toString'], ['loot', 'constructor'], ['loot', '__proto__'],
+      ['loot', 'toString'], ['loot', 'constructor'], ['loot', '__proto__'], ['loot', 'us_phone'],
+      ['protection'], ['protection', ''], ['protection', null], ['protection', 'missing'],
+      ['protection', 'toString'], ['protection', 'constructor'], ['protection', '__proto__'],
+      ['protection', 'subsidy'], ['us_phone'],
     ]) expect(makePickupVisual(kind, id)).toBeNull();
     expect(glowSprite).not.toHaveBeenCalled();
     expect(textTexture).not.toHaveBeenCalled();
@@ -108,8 +118,8 @@ describe('makePickupVisual 有限共享模板', () => {
         if (node.material?.map) expect(clone.material.map).toBe(node.material.map);
       });
     }
-    expect(glowSprite).toHaveBeenCalledTimes(11);
-    expect(textTexture).toHaveBeenCalledTimes(9);
+    expect(glowSprite).toHaveBeenCalledTimes(14);
+    expect(textTexture).toHaveBeenCalledTimes(13);
   });
 
   it('移动/旋转/缩放一个实例及子节点不影响另一实例或之后生成的模板克隆', () => {
@@ -137,7 +147,7 @@ describe('makePickupVisual 有限共享模板', () => {
       expect(after[name].size).toBe(before[name].size);
       expect([...after[name]].every((resource) => before[name].has(resource))).toBe(true);
     }
-    expect(glowSprite).toHaveBeenCalledTimes(11);
-    expect(textTexture).toHaveBeenCalledTimes(9);
+    expect(glowSprite).toHaveBeenCalledTimes(14);
+    expect(textTexture).toHaveBeenCalledTimes(13);
   });
 });

@@ -149,16 +149,6 @@ export class AudioEngine {
     o.start(t0); o.stop(t0 + 0.22);
   }
 
-  reload(total = 1.6) {
-    // 音效节点按实际换弹时长等比排程，手套缩短换弹后不再出现「换完还响」
-    const k = Math.max(0.2, total) / 1.6;
-    this._noise({ dur: 0.04, type: 'highpass', freq: 2400, gain: 0.2 });
-    this._noise({ dur: 0.05, type: 'highpass', freq: 1800, gain: 0.22, delay: 0.55 * k });
-    this._tone({ type: 'square', f0: 700, f1: 500, dur: 0.04, gain: 0.08, delay: 0.55 * k });
-    this._noise({ dur: 0.06, type: 'highpass', freq: 2600, gain: 0.26, delay: 1.15 * k });
-    this._tone({ type: 'triangle', f0: 320, f1: 240, dur: 0.06, gain: 0.14, delay: 1.15 * k });
-  }
-
   emptyClick() {
     this._noise({ dur: 0.03, type: 'highpass', freq: 3000, gain: 0.14 });
   }

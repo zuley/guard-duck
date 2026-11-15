@@ -1,8 +1,9 @@
 // 宣发视频剪辑：按 markers 切分录制素材 + 渲染章节卡 + xfade/acrossfade 合成。
 // 用法：node scripts/promo-edit.mjs
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, copyFileSync } from 'node:fs';
 import WebSocket from 'ws';
+import { REFERENCE_DATE } from '../src/subscriptions.js';
 
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const FFMPEG = process.env.LOCALAPPDATA + '/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-9.0.2-full_build/bin/ffmpeg.exe';
@@ -13,8 +14,17 @@ const OUT = 'videos/guard-duck-promo.mp4';
 const X = 0.4; // crossfade sec
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const MECHANICS = 'subscriptions-tokens-v1';
+const LOCAL_NOTICE = '宣传摆拍 · 纯本地游戏 · 订阅 / Token / 封号 / 保护道具均为虚构 · 无真实 API / 账号 / 支付 / 资料采集';
+const capture = JSON.parse(readFileSync('shots/.promo-markers.json', 'utf8'));
+const { fullStart, markers: M, frames } = capture;
+if (capture.mechanics !== MECHANICS || capture.referenceDate !== REFERENCE_DATE
+  || !['initialPlan', 'plans', 'benefits', 'protections', 'over'].every(name => Number.isFinite(M?.[name]))) {
+  throw new Error('Subscription footage required; manually re-record with the updated promo-record.mjs before editing.');
+}
 mkdirSync(EDIT_DIR, { recursive: true });
-const { fullStart, markers: M, frames } = JSON.parse(readFileSync('shots/.promo-markers.json', 'utf8'));
+copyFileSync('C:/Windows/Fonts/msyh.ttc', `${EDIT_DIR}/msyh.ttc`);
+writeFileSync(`${EDIT_DIR}/local-notice.txt`, LOCAL_NOTICE);
 
 // webm 无时长元数据且 MediaRecorder 起点有偏差，解码实测后反推 music 真实起点
 function measureDur(file) {
@@ -60,13 +70,21 @@ async function renderCards() {
     await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       document.addEventListener('DOMContentLoaded', () => {
         const captions = {
-          3: { title: '波次强化卡', sub: '每波三选一 · 普通 / 稀有 / 传说 · 可重复叠层' },
-          4: { title: '武器与福利', sub: '四把模型枪 · 金币购买 / 装备 · 福利拾取即生效' },
+          1: { title: '调用与生存', sub: '每次基础 32 Token · 齐射只计一次 · 旧额度不跨波' },
+          2: { title: '主动技能', sub: '按等级解锁 · 独立冷却 · 不消耗 Token 或金币' },
+          3: { title: '波次强化卡', sub: '每波三选一 · 普通 / 稀有 / 传说 · 经济卡可叠层' },
+          4: { title: '订阅与保护', sub: 'Claude / GPT / Qwen / GLM / DS · 按波续订 · 切换立即全额收费' },
         };
         const caption = captions[new URLSearchParams(location.search).get('c')];
-        if (!caption) return;
-        document.querySelector('#wrap h1').textContent = caption.title;
-        document.querySelector('#wrap .sub').textContent = caption.sub;
+        if (caption) {
+          document.querySelector('#wrap h1').textContent = caption.title;
+          const sub = document.querySelector('#wrap .sub'); sub.textContent = caption.sub;
+          Object.assign(sub.style, { maxWidth: '1800px', letterSpacing: '0.06em', lineHeight: '1.6' });
+        }
+        const note = document.createElement('div'); note.textContent = ${JSON.stringify(LOCAL_NOTICE)};
+        Object.assign(note.style, { position: 'absolute', bottom: '40px', left: '24px', right: '24px',
+          textAlign: 'center', color: '#e8dcc0', fontSize: '24px', letterSpacing: '0.04em' });
+        document.body.appendChild(note);
       });
     ` });
     for (const c of ['1', '2', '3', '4', 'end']) {
@@ -108,7 +126,8 @@ function addCard(id, dur, audio, ssOverride) {
   blocks.push({ id, kind: 'card', dur, audio, ss });
 }
 
-addFrames('title', M.title, M.beauty, 'full');
+addFrames('title', M.title, M.initialPlan, 'full');
+addFrames('initialPlan', M.initialPlan, M.beauty, 'full');
 addFrames('beauty', M.beauty, M.beauty + 3.5, 'full');
 addFrames('m1', M.skills + 0.3, M.skills + 1.5, 'music');
 addFrames('m2', M.combatB + 0.7, M.combatB + 1.9, 'music');
@@ -117,12 +136,13 @@ addFrames('m4', M.combatD + 5.6, M.combatD + 6.8, 'music');
 addCard('card1', 1.8, 'music');
 addFrames('combat', M.combatA, M.talents, 'full');
 addCard('card2', 1.8, 'music');
-addFrames('skills', M.skills, M.shop, 'full');
+addFrames('skills', M.skills, M.plans, 'full');
 addCard('card3', 1.8, 'music');
 addFrames('talents', M.talents, M.skills, 'full');
-addCard('card4', 1.8, 'music');
-addFrames('weapons', M.shop, M.benefits, 'full');
-addFrames('benefits', M.benefits, M.over, 'full');
+addCard('card4', 2.8, 'music');
+addFrames('plans', M.plans, M.benefits, 'full');
+addFrames('benefits', M.benefits, M.protections, 'full');
+addFrames('protections', M.protections, M.over, 'full');
 addFrames('over', M.over, M.end, 'full');
 addCard('cardend', 2.5, 'music', M.over + 1.2 - musicStart);
 
@@ -144,6 +164,8 @@ function encodeBlock(b) {
   }
   const audioFile = b.audio === 'full' ? 'shots/.promo-full.webm' : 'shots/.promo-music.webm';
   args.push('-ss', Math.max(0, b.ss).toFixed(3), '-t', b.dur.toFixed(3), '-i', audioFile);
+  if (b.kind === 'frames') args.push('-vf',
+    `drawbox=x=0:y=ih-46:w=iw:h=46:color=black@0.7:t=fill,drawtext=fontfile=${EDIT_DIR}/msyh.ttc:textfile=${EDIT_DIR}/local-notice.txt:fontsize=22:fontcolor=white:x=(w-tw)/2:y=h-34`);
   args.push('-map', '0:v', '-map', '1:a',
     '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', '60',
     '-c:a', 'aac', '-b:a', '192k', '-t', b.dur.toFixed(3), '-shortest', out);
