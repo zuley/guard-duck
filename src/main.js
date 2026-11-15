@@ -62,8 +62,8 @@ hud.syncVolume(audio);
 document.getElementById('shopClose').addEventListener('click', () => {
   game.closeShop();
 });
-document.getElementById('talentClose').addEventListener('click', () => {
-  game.closeTalents();
+document.getElementById('cardBookClose').addEventListener('click', () => {
+  game.closeCardBook();
 });
 document.getElementById('tabBuy').addEventListener('click', () => {
   audio.uiClick(); hud.shopTab('buy');
@@ -78,7 +78,23 @@ window.addEventListener('keydown', (e) => {
     if (game.state === 'playing') game.pause();
     else if (game.state === 'paused') game.resume();
     else if (game.state === 'shop') game.closeShop();
-    else if (game.state === 'talent') game.closeTalents();
+    else if (game.state === 'cardbook') game.closeCardBook();
+    // 选卡必须三选一，Esc 不能跳过
+    return;
+  }
+  // 选卡界面：1/2/3 直选，左右方向键移动焦点，回车/空格确认
+  if (game.state === 'card') {
+    const draft = game.cardDraft || [];
+    if (/^Digit[1-3]$/.test(e.code)) {
+      const c = draft[+e.code.slice(5) - 1];
+      if (c) game.pickCard(c.id);
+      return;
+    }
+    const cards = [...document.querySelectorAll('#cardRow .pickCard')];
+    const i = cards.indexOf(document.activeElement);
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') { cards[(i - 1 + cards.length) % cards.length]?.focus(); return; }
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') { cards[(i + 1) % cards.length]?.focus(); return; }
+    if (e.code === 'Enter' || e.code === 'Space') { (cards[i] || cards[0])?.click(); return; }
     return;
   }
   // 死亡结算延迟期内任意键跳过等待，直接出结算
@@ -99,13 +115,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // 菜单打开时不记录移动/冲刺键，避免关店瞬间残留触发
-  if (game.state === 'shop' || game.state === 'talent' || game.state === 'paused') {
+  if (game.state === 'shop' || game.state === 'cardbook' || game.state === 'paused') {
     if (e.code === 'KeyB' && game.state === 'shop') game.closeShop();
-    else if (e.code === 'KeyT' && game.state === 'talent') game.closeTalents();
+    else if (e.code === 'KeyT' && game.state === 'cardbook') game.closeCardBook();
     return;
   }
   if (e.code === 'KeyB') { game.openShop(); return; }
-  if (e.code === 'KeyT') { game.openTalents(); return; }
+  if (e.code === 'KeyT') { game.openCardBook(); return; }
   if (/^Digit[1-4]$/.test(e.code)) { game.castSkill(+e.code.slice(5)); return; }
   if (e.code === 'KeyQ') { game.cycleGun(-1); return; }
   if (e.code === 'KeyE') { game.cycleGun(1); return; }

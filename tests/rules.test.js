@@ -21,12 +21,15 @@ import {
   xpForLevel,
   xpForKill,
   WAVE_CLEAR_XP,
-  TALENT_BRANCHES,
-  TALENTS,
-  talentNext,
-  talentEffects,
+  CARDS,
+  CARD_BY_ID,
+  CARD_RARITIES,
+  cardAvailable,
+  rollCardRarity,
+  rollCards,
+  cardEffects,
   SKILLS,
-  applyTalents,
+  applyCards,
   ELITE,
   eliteHpMul,
   ELITE_SKILL,
@@ -530,84 +533,160 @@ describe('经验与等级曲线', () => {
   });
 });
 
-describe('天赋树结构', () => {
-  it('三条分支各四层共 12 个节点', () => {
-    expect(TALENT_BRANCHES.map((b) => b.id)).toEqual(['fire', 'guard', 'swift']);
-    expect(TALENTS).toHaveLength(12);
-    for (const br of TALENT_BRANCHES) {
-      const nodes = TALENTS.filter((t) => t.branch === br.id);
-      expect(nodes).toHaveLength(4);
-      expect(nodes.map((t) => t.tier).sort()).toEqual([1, 2, 3, 4]);
+describe('强化卡池结构', () => {
+  it('三档稀有度：普通权重最高，金卡最低', () => {
+    expect(Object.keys(CARD_RARITIES)).toEqual(['common', 'rare', 'gold']);
+    expect(CARD_RARITIES.common.weight).toBeGreaterThan(CARD_RARITIES.rare.weight);
+    expect(CARD_RARITIES.rare.weight).toBeGreaterThan(CARD_RARITIES.gold.weight);
+    expect(CARD_RARITIES.gold.order).toBeGreaterThan(CARD_RARITIES.rare.order);
+  });
+  it('每张卡 id 唯一、字段完整、层数上限为正', () => {
+    const ids = CARDS.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const c of CARDS) {
+      expect(CARD_RARITIES[c.rarity]).toBeTruthy();
+      expect(c.name.length).toBeGreaterThan(0);
+      expect(c.icon.length).toBe(1);
+      expect(c.max).toBeGreaterThan(0);
+      expect(CARD_BY_ID[c.id]).toBe(c);
+      for (let n = 1; n <= c.max; n++) expect(typeof c.desc(n)).toBe('string');
     }
   });
-  it('第 2 层为技能强化节点，前置为上一层至少 1 点', () => {
-    const byId = Object.fromEntries(TALENTS.map((t) => [t.id, t]));
-    for (const t of TALENTS) {
-      if (t.tier === 1) expect(t.req).toBeNull();
-      else {
-        const prev = TALENTS.find((x) => x.branch === t.branch && x.tier === t.tier - 1);
-        expect(t.req).toBe(prev.id);
+  it('普通卡只给固定属性，绿/金卡才带特效', () => {
+    const base = cardEffects({});
+    for (const c of CARDS.filter((x) => x.rarity === 'common')) {
+      expect(cardEffects({ [c.id]: 1 }).mods).toEqual({});
+      expect(cardEffects({ [c.id]: 1 }).storm).toEqual(base.storm);
+    }
+    for (const c of CARDS.filter((x) => x.rarity !== 'common')) {
+      const ef = cardEffects({ [c.id]: 1 });
+      // 特效走 mods，技能强化卡（乱杀精通）走 storm 数值，二者都算「有特效」
+      const hasEffect = Object.keys(ef.mods).length > 0 || JSON.stringify(ef.storm) !== JSON.stringify(base.storm);
+      expect(hasEffect, `${c.id} 应提供特效`).toBe(true);
+    }
+  });
+  it('卡池足够大，普通/稀有/传说都有多张', () => {
+    for (const r of ['common', 'rare', 'gold']) {
+      expect(CARDS.filter((c) => c.rarity === r).length).toBeGreaterThanOrEqual(8);
+    }
+  });
+});
+
+describe('抽卡规则', () => {
+  it('每次抽 3 张互不相同的卡', () => {
+    const rng = mulberry32(7);
+    for (let i = 0; i < 60; i++) {
+      const draft = rollCards(rng, {}, 1);
+      expect(draft).toHaveLength(3);
+      expect(new Set(draft.map((c) => c.id)).size).toBe(3);
+    }
+  });
+  it('金绿是低概率：大样本下普通占多数，金卡明显最少', () => {
+    const rng = mulberry32(20260114);
+    const count = { common: 0, rare: 0, gold: 0 };
+    for (let i = 0; i < 6000; i++) count[rollCardRarity(rng)]++;
+    expect(count.common).toBeGreaterThan(count.rare);
+    expect(count.rare).toBeGreaterThan(count.gold);
+    expect(count.gold / 6000).toBeGreaterThan(0.03);
+    expect(count.gold / 6000).toBeLessThan(0.14);
+    expect(count.common / 6000).toBeGreaterThan(0.6);
+  });
+  it('Boss 波（每 5 波）保底一张金卡', () => {
+    const rng = mulberry32(99);
+    for (const wave of [5, 10, 15, 20]) {
+      for (let i = 0; i < 12; i++) {
+        expect(rollCards(rng, {}, wave).some((c) => c.rarity === 'gold')).toBe(true);
       }
     }
-    expect(byId.t_storm.skill).toBe('storm');
-    expect(byId.t_shield.skill).toBe('shield');
-    expect(byId.t_rage.skill).toBe('rage');
-    expect(byId.t_slow.skill).toBe('slow');
+  });
+  it('非 Boss 波不保底金卡', () => {
+    const rng = mulberry32(5);
+    let goldHands = 0;
+    for (let i = 0; i < 200; i++) if (rollCards(rng, {}, 3).some((c) => c.rarity === 'gold')) goldHands++;
+    expect(goldHands).toBeLessThan(120);
+  });
+  it('满层的卡不再出现，候选带当前层数与下一层', () => {
+    const owned = { c_dmg: CARD_BY_ID.c_dmg.max };
+    expect(cardAvailable(CARD_BY_ID.c_dmg, owned)).toBe(false);
+    const rng = mulberry32(3);
+    for (let i = 0; i < 40; i++) {
+      const draft = rollCards(rng, owned, 1);
+      expect(draft.some((c) => c.id === 'c_dmg')).toBe(false);
+      for (const c of draft) expect(c.next).toBe((owned[c.id] || 0) + 1);
+    }
+  });
+  it('部分叠层的卡标注 stacks 与 next', () => {
+    const rng = mulberry32(11);
+    const draft = rollCards(rng, { c_hp: 2 }, 1);
+    const hp = draft.find((c) => c.id === 'c_hp');
+    if (hp) { expect(hp.stacks).toBe(2); expect(hp.next).toBe(3); }
+  });
+  it('卡池枯竭时降级凑满，全满则返回空（不卡流程）', () => {
+    const allButOne = Object.fromEntries(CARDS.slice(1).map((c) => [c.id, c.max]));
+    expect(rollCards(mulberry32(1), allButOne, 5)).toHaveLength(1);
+    const all = Object.fromEntries(CARDS.map((c) => [c.id, c.max]));
+    expect(rollCards(mulberry32(1), all, 5)).toEqual([]);
+  });
+  it('同一随机种子抽卡可复现', () => {
+    expect(rollCards(mulberry32(42), {}, 3).map((c) => c.id))
+      .toEqual(rollCards(mulberry32(42), {}, 3).map((c) => c.id));
   });
 });
 
-describe('talentNext 加点规则', () => {
-  it('未满级返回下一点花费 1', () => {
-    expect(talentNext('t_dmg', 0)).toEqual({ rank: 1, cost: 1 });
-    expect(talentNext('t_dmg', 2)).toEqual({ rank: 3, cost: 1 });
-  });
-  it('满级返回 null', () => {
-    expect(talentNext('t_dmg', 3)).toBeNull();
-    expect(talentNext('t_storm', 1)).toBeNull();
-    expect(talentNext('unknown', 0)).toBeNull();
-  });
-});
-
-describe('talentEffects 数值叠加', () => {
-  it('空天赋为基准值，技能只随等级解锁（开局仅嘎嘎乱杀）', () => {
-    const ef = talentEffects({});
+describe('cardEffects 数值叠加', () => {
+  it('无卡为基准值，技能只随等级解锁（开局仅嘎嘎乱杀）', () => {
+    const ef = cardEffects({});
     expect(ef.dmgBonus).toBe(1);
     expect(ef.maxHpBonus).toBe(0);
     expect(ef.speedBonus).toBe(1);
     expect(ef.killHeal).toBe(0);
     expect(ef.dashCdMul).toBe(1);
+    expect(ef.mods).toEqual({});
     expect(ef.skills).toEqual({ storm: true, shield: false, rage: false, slow: false });
   });
-  it('火力伤害每点 +8%', () => {
-    expect(talentEffects({ t_dmg: 3 }).dmgBonus).toBeCloseTo(1.24);
+  it('普通卡按层线性叠加', () => {
+    const ef = cardEffects({ c_dmg: 3, c_hp: 2, c_speed: 2, c_rate: 2 });
+    expect(ef.dmgBonus).toBeCloseTo(1.36);
+    expect(ef.maxHpBonus).toBe(50);
+    expect(ef.speedBonus).toBeCloseTo(1.16);
+    expect(ef.rateMul).toBeCloseTo(1.24);
   });
-  it('守护血量每点 +20 且击杀回血每点 +4', () => {
-    const ef = talentEffects({ t_hp: 3, t_regen: 2 });
-    expect(ef.maxHpBonus).toBe(60);
-    expect(ef.killHeal).toBe(8);
+  it('递减类卡有上限，不会减到 0 或负数', () => {
+    const ef = cardEffects({ c_reload: 3, c_dash: 3, c_armor: 3, c_spread: 3 });
+    for (const v of [ef.reloadMul, ef.dashCdMul, ef.armorMul, ef.spreadMul]) {
+      expect(v).toBeGreaterThan(0.4);
+      expect(v).toBeLessThan(1);
+    }
   });
-  it('迅捷移速每点 +6% 冲刺冷却每点 -20%', () => {
-    const ef = talentEffects({ t_speed: 3, t_dash: 2 });
-    expect(ef.speedBonus).toBeCloseTo(1.18);
-    expect(ef.dashCdMul).toBeCloseTo(0.6);
+  it('稀有卡启用对应特效并随层增强', () => {
+    const one = cardEffects({ r_explosive: 1, r_crit: 1, r_frost: 1 }).mods;
+    const two = cardEffects({ r_explosive: 2, r_crit: 2, r_frost: 2 }).mods;
+    expect(two.explosive.radius).toBeGreaterThan(one.explosive.radius);
+    expect(two.explosive.mul).toBeGreaterThan(one.explosive.mul);
+    expect(two.crit.chance).toBeGreaterThan(one.crit.chance);
+    expect(two.frost.factor).toBeLessThan(one.frost.factor);
+    expect(cardEffects({ r_pierce: 2 }).mods.pierce).toBe(2);
+    expect(cardEffects({ r_killheal: 3 }).killHeal).toBe(18);
   });
-  it('强化节点提升技能数值（解锁与否只由等级决定）', () => {
-    const ef = talentEffects({ t_storm: 1, t_storm2: 2, t_shield: 1, t_shield2: 2, t_slow: 1, t_slow2: 2 }, 10);
-    expect(ef.storm.damage).toBe(125);
-    expect(ef.storm.radius).toBeCloseTo(6.6);
-    expect(ef.shield.pool).toBe(190);
-    expect(ef.shield.duration).toBe(11);
-    expect(ef.slow.duration).toBe(9);
-    expect(ef.slow.factor).toBeCloseTo(0.1);
+  it('传说卡特效最强：处决/连锁/羽毛/不死鸟', () => {
+    const m = cardEffects({ g_chain: 2, g_orbit: 2, g_execute: 2, g_phoenix: 1, g_multishot: 2 }).mods;
+    expect(m.chain.count).toBe(3);
+    expect(m.orbit.count).toBe(4);
+    expect(m.execute).toBeCloseTo(0.29);
+    expect(m.phoenix).toBe(true);
+    expect(m.multishot).toBe(2);
   });
-  it('红温强化提升持续与伤害，射速倍率固定', () => {
-    const base = talentEffects({}, 10);
-    expect(base.rage.duration).toBe(6);
-    expect(base.rage.dmgMul).toBeCloseTo(1.35);
-    const ef = talentEffects({ t_rage: 1 }, 10);
-    expect(ef.rage.duration).toBe(8);
-    expect(ef.rage.dmgMul).toBeCloseTo(1.45);
-    expect(ef.rage.rpmMul).toBeCloseTo(1.45);
+  it('金卡「乱杀精通」强化技能数值且缩短冷却', () => {
+    const base = cardEffects({}, 10);
+    expect(base.storm.damage).toBe(60);
+    const ef = cardEffects({ g_storm: 3 }, 10);
+    expect(ef.storm.damage).toBe(180);
+    expect(ef.storm.radius).toBeCloseTo(8.1);
+    expect(ef.storm.cdMul).toBeCloseTo(0.55);
+  });
+  it('卡牌不影响技能解锁等级', () => {
+    const ef = cardEffects({ g_storm: 3 }, 1);
+    expect(ef.skills).toEqual({ storm: true, shield: false, rage: false, slow: false });
   });
 });
 
@@ -643,8 +722,8 @@ describe('skillsForLevel 技能随等级解锁', () => {
     expect(count(5)).toBe(2); expect(count(6)).toBe(3);
     expect(count(8)).toBe(3); expect(count(9)).toBe(4);
   });
-  it('低等级点技能天赋不会提前解锁技能', () => {
-    const ef = talentEffects({ t_storm: 1, t_shield: 1, t_rage: 1, t_slow: 1 }, 1);
+  it('低等级拿满强化卡也不会提前解锁技能', () => {
+    const ef = cardEffects({ g_storm: 3, g_orbit: 2, g_chain: 2 }, 1);
     expect(ef.skills).toEqual({ storm: true, shield: false, rage: false, slow: false });
   });
   it('requiredLevel 是唯一来源：与解锁判定一致（1/3/6/9）', () => {
@@ -662,21 +741,41 @@ describe('skillsForLevel 技能随等级解锁', () => {
   });
 });
 
-describe('applyTalents 与装备合成', () => {
-  it('把天赋加成并入 computeLoadout 结果', () => {
+describe('applyCards 与装备合成', () => {
+  it('把卡牌加成并入 computeLoadout 结果', () => {
     const base = computeLoadout('carbine', {});
-    const ef = talentEffects({ t_dmg: 3, t_hp: 3, t_speed: 3, t_dash: 2 });
-    const merged = applyTalents(base, ef);
-    expect(merged.damage).toBeCloseTo(base.damage * 1.24);
-    expect(merged.maxHp).toBe(base.maxHp + 60);
-    expect(merged.speedMul).toBeCloseTo(base.speedMul * 1.18);
-    expect(merged.dashCdMul).toBeCloseTo(0.6);
+    const merged = applyCards(base, cardEffects({ c_dmg: 3, c_hp: 3, c_speed: 3, c_dash: 2 }));
+    expect(merged.damage).toBeCloseTo(base.damage * 1.36);
+    expect(merged.maxHp).toBe(base.maxHp + 75);
+    expect(merged.speedMul).toBeCloseTo(base.speedMul * 1.24);
+    expect(merged.dashCdMul).toBeCloseTo(0.68);
   });
-  it('天赋与护具加成叠乘而非覆盖', () => {
-    const geared = computeLoadout('carbine', { helmet: 3, shoes: 3 });
-    const merged = applyTalents(geared, talentEffects({ t_hp: 3, t_speed: 3 }));
-    expect(merged.maxHp).toBe(geared.maxHp + 60);
-    expect(merged.speedMul).toBeCloseTo(geared.speedMul * 1.18);
+  it('卡牌与护具加成叠乘而非覆盖', () => {
+    const geared = computeLoadout('carbine', { helmet: 3, shoes: 3, armor: 3, gloves: 3 });
+    const merged = applyCards(geared, cardEffects({ c_hp: 3, c_speed: 3, c_armor: 2, c_reload: 2 }));
+    expect(merged.maxHp).toBe(geared.maxHp + 75);
+    expect(merged.speedMul).toBeCloseTo(geared.speedMul * 1.24);
+    expect(merged.dmgMul).toBeCloseTo(geared.dmgMul * 0.78);
+    expect(merged.reloadTime).toBeCloseTo(geared.reloadTime * 0.67);
+  });
+  it('射速/弹匣卡改写实际武器参数', () => {
+    const base = computeLoadout('carbine', {});
+    const merged = applyCards(base, cardEffects({ c_rate: 2, c_mag: 2 }));
+    expect(merged.rpm).toBeCloseTo(base.rpm * 1.24);
+    expect(merged.magSize).toBe(Math.round(base.magSize * 1.5));
+  });
+  it('射程卡同步后移衰减区间，远处伤害确实提高', () => {
+    const base = computeLoadout('carbine', {});
+    const merged = applyCards(base, cardEffects({ c_range: 2 }));
+    expect(merged.range).toBeGreaterThan(base.range);
+    expect(merged.falloffStart).toBeGreaterThan(base.gun.falloffStart);
+    const d = base.range * 0.9;
+    expect(damageAtDistance(100, d, merged)).toBeGreaterThan(damageAtDistance(100, d, base.gun));
+  });
+  it('特效集合透传到 loadout.mods 供战斗层读取', () => {
+    const merged = applyCards(computeLoadout('carbine', {}), cardEffects({ r_burn: 1, g_orbit: 1 }));
+    expect(merged.mods.burn.dps).toBe(8);
+    expect(merged.mods.orbit.count).toBe(3);
   });
 });
 

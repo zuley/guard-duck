@@ -195,6 +195,36 @@ export class AudioEngine {
     this._tone({ type: 'sine', f0: 880, f1: 660, dur: 0.06, gain: 0.12 });
   }
 
+  uiHover() {
+    this._tone({ type: 'sine', f0: 1320, dur: 0.035, gain: 0.05 });
+  }
+
+  // 发牌：三张卡依次翻出的短促纸响，最后一张略高
+  cardDeal() {
+    for (let i = 0; i < 3; i++) {
+      this._noise({ dur: 0.1, type: 'bandpass', freq: 2200 + i * 500, freqEnd: 900, q: 0.9, gain: 0.13, delay: i * 0.11 });
+      this._tone({ type: 'triangle', f0: 520 + i * 130, dur: 0.09, gain: 0.07, delay: i * 0.11 });
+    }
+  }
+
+  // 选卡：稀有度越高音阶越华丽，金卡加一层钟鸣
+  cardPick(rarity = 'common') {
+    const seq = rarity === 'gold' ? [523, 659, 784, 1046, 1318]
+      : rarity === 'rare' ? [523, 784, 1046]
+        : [659, 880];
+    seq.forEach((f, i) => this._tone({ type: 'triangle', f0: f, dur: 0.16, gain: 0.15, delay: i * 0.06 }));
+    if (rarity === 'gold') {
+      this._tone({ type: 'sine', f0: 1568, dur: 0.5, gain: 0.12, delay: 0.3 });
+      this._noise({ dur: 0.5, type: 'highpass', freq: 3000, gain: 0.07, delay: 0.28 });
+    }
+    this.quack(rarity === 'gold' ? 1.2 : 1, 0.12, 0.04);
+  }
+
+  zap() {
+    this._noise({ dur: 0.16, type: 'highpass', freq: 2600, freqEnd: 5200, gain: 0.16 });
+    this._tone({ type: 'square', f0: 1400, f1: 420, dur: 0.13, gain: 0.09 });
+  }
+
   skillCast() {
     this._noise({ dur: 0.28, type: 'bandpass', freq: 700, freqEnd: 3200, q: 1.1, gain: 0.2 });
     this._tone({ type: 'triangle', f0: 392, f1: 784, dur: 0.24, gain: 0.16 });

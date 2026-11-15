@@ -219,6 +219,39 @@ export class FX {
       s.visible = false; scene.add(s);
       this.numbers.push({ s, life: 0 });
     }
+    // 连锁闪电（金卡）：折线电弧池，几何体复用，只更新顶点
+    this.bolts = [];
+    this._boltSegs = 7;
+    for (let i = 0; i < 8; i++) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((this._boltSegs + 1) * 3), 3));
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: 0x9fe8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      line.frustumCulled = false;
+      line.visible = false;
+      scene.add(line);
+      this.bolts.push({ line, life: 0 });
+    }
+    this.boltIdx = 0;
+  }
+
+  // 两点之间的锯齿电弧，命中特效用；池满则复用最早的一条
+  bolt(a, b, color = 0x9fe8ff) {
+    const item = this.bolts[this.boltIdx];
+    this.boltIdx = (this.boltIdx + 1) % this.bolts.length;
+    const arr = item.line.geometry.attributes.position.array;
+    const n = this._boltSegs;
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const jitter = i === 0 || i === n ? 0 : 0.34;
+      arr[i * 3] = a.x + (b.x - a.x) * t + (Math.random() - 0.5) * jitter;
+      arr[i * 3 + 1] = a.y + (b.y - a.y) * t + (Math.random() - 0.5) * jitter;
+      arr[i * 3 + 2] = a.z + (b.z - a.z) * t + (Math.random() - 0.5) * jitter;
+    }
+    item.line.geometry.attributes.position.needsUpdate = true;
+    item.line.material.color.set(color);
+    item.line.visible = true;
+    item.life = 0.16;
   }
 
   spark(pos, dir, n = 8, color = 0xffc060, speed = 7) {
@@ -382,6 +415,9 @@ export class FX {
 
     for (const f of this.flashes) {
       if (f.life > 0) { f.life -= dt; f.s.material.opacity = Math.max(0, f.life / 0.06); if (f.life <= 0) f.s.visible = false; }
+    }
+    for (const b of this.bolts) {
+      if (b.life > 0) { b.life -= dt; b.line.material.opacity = Math.max(0, b.life / 0.16); if (b.life <= 0) b.line.visible = false; }
     }
     for (const l of this.lights) l.intensity = Math.max(0, l.intensity - dt * 220);
     for (const d of this.decals) {

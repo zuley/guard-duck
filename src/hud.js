@@ -1,4 +1,4 @@
-import { shopCatalog, LOOT_ITEMS, gearNext, TALENT_BRANCHES, TALENTS, talentNext, SKILLS } from './rules.js';
+import { shopCatalog, LOOT_ITEMS, gearNext, CARD_BY_ID, CARD_RARITIES, SKILLS } from './rules.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -69,9 +69,10 @@ export class HUD {
       buyPane: $('buyPane'), sellPane: $('sellPane'), tabBuy: $('tabBuy'), tabSell: $('tabSell'), tip: $('tip'),
       statRemain: $('statRemain'), resTime: $('resTime'), resCoins: $('resCoins'),
       resBest: $('resBest'), recordBadge: $('recordBadge'),
-      levelBadge: $('levelBadge'), xpFill: $('xpFill'), xpText: $('xpText'), pointsChip: $('pointsChip'),
+      levelBadge: $('levelBadge'), xpFill: $('xpFill'), xpText: $('xpText'), cardChip: $('cardChip'),
       skillBar: $('skillBar'), shieldBar: $('shieldBar'), shieldFill: $('shieldFill'),
-      talent: $('talentScreen'), talentPoints: $('talentPoints'), talentTree: $('talentTree'),
+      card: $('cardScreen'), cardWave: $('cardWave'), cardRow: $('cardRow'), cardOwned: $('cardOwned'),
+      cardBook: $('cardBookScreen'), cardBookGrid: $('cardBookGrid'), cardBookCount: $('cardBookCount'),
     };
     this.el.skillSlots = {};
     this._skillRefs = {};
@@ -147,12 +148,15 @@ export class HUD {
     }
   }
 
-  growth(level, xp, xpNeed, points) {
+  growth(level, xp, xpNeed, cardCount) {
     this.el.levelBadge.textContent = 'Lv.' + level;
     this.el.xpFill.style.width = Math.min(1, xp / xpNeed) * 100 + '%';
     this.el.xpText.textContent = `${Math.floor(xp)} / ${xpNeed}`;
-    this.el.pointsChip.textContent = points;
-    this.el.pointsChip.classList.toggle('has', points > 0);
+    if (this._cardCount !== cardCount) {
+      this._cardCount = cardCount;
+      this.el.cardChip.textContent = cardCount;
+      this.el.cardChip.classList.toggle('has', cardCount > 0);
+    }
   }
 
   skills(unlocked, cds, active) {
@@ -177,65 +181,182 @@ export class HUD {
     this.el.shieldFill.style.width = (on ? Math.min(1, v / max) * 100 : 0) + '%';
   }
 
-  talentOpen(on) {
-    this.el.talent.classList.toggle('hidden', !on);
+  /* ---------------- 波次三选一强化卡 ---------------- */
+
+  cardOpen(on) {
+    this.el.card.classList.toggle('hidden', !on);
     if (!on && document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   }
 
-  renderTalents(game) {
-    this.el.talentPoints.textContent = game.points;
-    const ae = document.activeElement;
-    const refocusId = ae && ae.closest && ae.closest('.tnode') ? ae.closest('.tnode').dataset.talent : null;
-    const tree = this.el.talentTree;
-    tree.textContent = '';
-    for (const br of TALENT_BRANCHES) {
-      const col = document.createElement('div');
-      col.className = 'branch';
-      col.style.setProperty('--bc', '#' + br.color.toString(16).padStart(6, '0'));
-      const head = document.createElement('div');
-      head.className = 'branchHead';
-      head.textContent = br.label;
-      const sub = document.createElement('span');
-      sub.textContent = br.desc;
-      head.appendChild(sub);
-      col.appendChild(head);
-      const nodes = TALENTS.filter((t) => t.branch === br.id).sort((a, b) => a.tier - b.tier);
-      for (const t of nodes) {
-        const ranks = game.talents[t.id] || 0;
-        const next = talentNext(t.id, ranks);
-        const reqOk = !t.req || (game.talents[t.req] > 0);
-        const card = document.createElement('div');
-        card.className = 'tnode' + (ranks > 0 ? ' owned' : '') + (!reqOk ? ' locked' : '');
-        card.dataset.talent = t.id;
-        const name = document.createElement('b');
-        name.textContent = t.name + (t.skill ? ' ★' : '');
-        const pips = document.createElement('div');
-        pips.className = 'pips';
-        for (let i = 0; i < t.max; i++) {
-          const pip = document.createElement('i');
-          if (i < ranks) pip.className = 'on';
-          pips.appendChild(pip);
-        }
-        const desc = document.createElement('span');
-        const btn = document.createElement('button');
-        if (!next) {
-          desc.textContent = t.desc(ranks - 1);
-          btn.textContent = '已满级'; btn.disabled = true;
-        } else {
-          desc.textContent = t.desc(ranks);
-          if (!reqOk) { btn.textContent = '前置未解锁'; btn.disabled = true; }
-          else if (game.points < next.cost) { btn.textContent = '天赋点不足'; btn.disabled = true; }
-          else { btn.textContent = `加点 ${ranks}/${t.max}`; btn.addEventListener('click', () => game.buyTalent(t.id)); }
-        }
-        card.append(name, pips, desc, btn);
-        col.appendChild(card);
+  cardBookOpen(on) {
+    this.el.cardBook.classList.toggle('hidden', !on);
+    if (!on && document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  }
+
+  // 卡面图标：稀有度配色的程序化 canvas 徽记，金色额外描边光芒
+  cardArt(card) {
+    const c = document.createElement('canvas');
+    c.width = 96; c.height = 96;
+    const x = c.getContext('2d');
+    const rar = CARD_RARITIES[card.rarity];
+    const col = rar.css;
+    const g = x.createRadialGradient(48, 44, 4, 48, 48, 46);
+    g.addColorStop(0, col + 'cc');
+    g.addColorStop(0.55, col + '33');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g;
+    x.fillRect(0, 0, 96, 96);
+    // 稀有度外框：普通圆角方、稀有六边形、传说星芒
+    x.strokeStyle = col; x.lineWidth = 3; x.lineJoin = 'round';
+    x.beginPath();
+    if (card.rarity === 'gold') {
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const r = i % 2 === 0 ? 38 : 19;
+        const px = 48 + Math.cos(a) * r, py = 46 + Math.sin(a) * r;
+        i ? x.lineTo(px, py) : x.moveTo(px, py);
       }
-      tree.appendChild(col);
+    } else if (card.rarity === 'rare') {
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 3;
+        const px = 48 + Math.cos(a) * 34, py = 46 + Math.sin(a) * 34;
+        i ? x.lineTo(px, py) : x.moveTo(px, py);
+      }
+    } else {
+      x.roundRect(16, 14, 64, 64, 14);
     }
-    if (refocusId) {
-      const btn = tree.querySelector(`.tnode[data-talent="${refocusId}"] button:not(:disabled)`)
-        || tree.querySelector(`.tnode[data-talent="${refocusId}"] button`);
-      if (btn) btn.focus();
+    x.closePath();
+    x.stroke();
+    x.fillStyle = 'rgba(10,8,4,.55)';
+    x.fill();
+    x.fillStyle = col;
+    x.font = '900 34px "Yuanti SC","Microsoft YaHei",sans-serif';
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.shadowColor = col; x.shadowBlur = 12;
+    x.fillText(card.icon, 48, 47);
+    return c;
+  }
+
+  renderCards(game) {
+    const draft = game.cardDraft || [];
+    this.el.cardWave.textContent = `第 ${game.wave} 波 · 肃清奖励`;
+    const row = this.el.cardRow;
+    row.textContent = '';
+    draft.forEach((card, i) => {
+      const rar = CARD_RARITIES[card.rarity];
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = `pickCard ${card.rarity}`;
+      el.dataset.card = card.id;
+      el.style.setProperty('--rc', rar.css);
+      el.style.setProperty('--rg', rar.glow);
+      el.style.setProperty('--i', String(i));
+
+      const badge = document.createElement('div');
+      badge.className = 'rarBadge';
+      badge.textContent = rar.label;
+      const art = document.createElement('div');
+      art.className = 'art';
+      art.appendChild(this.cardArt(card));
+      const name = document.createElement('b');
+      name.className = 'cname';
+      name.textContent = card.name;
+      const tag = document.createElement('div');
+      tag.className = 'ctag';
+      tag.textContent = card.tag;
+      const desc = document.createElement('p');
+      desc.className = 'cdesc';
+      desc.textContent = card.desc(card.next);
+      const pips = document.createElement('div');
+      pips.className = 'cpips';
+      for (let k = 0; k < card.max; k++) {
+        const pip = document.createElement('i');
+        if (k < card.stacks) pip.className = 'on';
+        else if (k === card.stacks) pip.className = 'next';
+        pips.appendChild(pip);
+      }
+      const foot = document.createElement('div');
+      foot.className = 'cfoot';
+      const lv = document.createElement('span');
+      lv.textContent = card.stacks ? `Lv.${card.stacks} → ${card.next}` : '新卡牌';
+      const key = document.createElement('kbd');
+      key.textContent = String(i + 1);
+      foot.append(lv, key);
+      el.append(badge, art, name, tag, desc, pips, foot);
+      el.addEventListener('click', () => game.pickCard(card.id));
+      el.addEventListener('mouseenter', () => { el.classList.add('hover'); game.audio.uiHover(); });
+      el.addEventListener('mouseleave', () => el.classList.remove('hover'));
+      row.appendChild(el);
+    });
+    this.cardBook(game);
+    // 默认聚焦第一张，键盘/手柄可直接确认
+    const first = row.querySelector('.pickCard');
+    if (first) first.focus();
+  }
+
+  // HUD 角标 + 选卡页底部「已获」缩略条
+  cardBook(game) {
+    const ids = [...new Set(game.cardHistory)];
+    const wrap = this.el.cardOwned;
+    if (!wrap) return;
+    wrap.textContent = '';
+    if (!ids.length) {
+      const empty = document.createElement('span');
+      empty.className = 'ownedEmpty';
+      empty.textContent = '尚未获得强化卡 · 每波肃清后可三选一';
+      wrap.appendChild(empty);
+      return;
+    }
+    for (const id of ids) {
+      const c = CARD_BY_ID[id];
+      const n = game.cards[id] || 0;
+      const chip = document.createElement('span');
+      chip.className = `ownedChip ${c.rarity}`;
+      chip.style.setProperty('--rc', CARD_RARITIES[c.rarity].css);
+      chip.textContent = `${c.name} ${n}`;
+      chip.title = c.desc(n);
+      wrap.appendChild(chip);
+    }
+  }
+
+  renderCardBook(game) {
+    const ids = [...new Set(game.cardHistory)];
+    this.el.cardBookCount.textContent = `${ids.length} 种 · ${Object.values(game.cards).reduce((a, b) => a + b, 0)} 层`;
+    const grid = this.el.cardBookGrid;
+    grid.textContent = '';
+    if (!ids.length) {
+      const empty = document.createElement('div');
+      empty.className = 'bookEmpty';
+      empty.textContent = '还没有强化卡。每波敌人肃清后会弹出三张卡，选一张变强！';
+      grid.appendChild(empty);
+      return;
+    }
+    // 金 → 绿 → 普通排序，方便一眼看到本局的构筑核心
+    const sorted = ids.map((id) => CARD_BY_ID[id]).sort((a, b) => CARD_RARITIES[b.rarity].order - CARD_RARITIES[a.rarity].order);
+    for (const c of sorted) {
+      const n = game.cards[c.id] || 0;
+      const rar = CARD_RARITIES[c.rarity];
+      const el = document.createElement('div');
+      el.className = `bookCard ${c.rarity}`;
+      el.style.setProperty('--rc', rar.css);
+      const art = document.createElement('div');
+      art.className = 'art';
+      art.appendChild(this.cardArt(c));
+      const body = document.createElement('div');
+      body.className = 'bbody';
+      const head = document.createElement('b');
+      head.textContent = c.name;
+      const lv = document.createElement('em');
+      lv.textContent = `Lv.${n}/${c.max}`;
+      head.appendChild(lv);
+      const rarTag = document.createElement('span');
+      rarTag.className = 'brar';
+      rarTag.textContent = rar.label;
+      const desc = document.createElement('p');
+      desc.textContent = c.desc(n);
+      body.append(head, rarTag, desc);
+      el.append(art, body);
+      grid.appendChild(el);
     }
   }
 
@@ -473,7 +594,8 @@ export class HUD {
     this.el.pause.classList.toggle('hidden', name !== 'pause');
     this.el.over.classList.toggle('hidden', name !== 'over');
     this.el.shop.classList.add('hidden');
-    this.el.talent.classList.add('hidden');
+    this.el.card.classList.add('hidden');
+    this.el.cardBook.classList.add('hidden');
     // 切回战斗/标题时清掉覆盖层按钮焦点，防止空格原生激活隐藏按钮
     if (name === null || name === 'start') {
       if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();

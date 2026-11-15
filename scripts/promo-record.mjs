@@ -255,18 +255,24 @@ try {
     g.mouse.down = false; return 1; })()`);
   await sleep(2200);
 
-  // ---- talents: 天赋树真实点击加点 ----
+  // ---- talents: 波次肃清三选一强化卡（真实点击选卡 + 图鉴） ----
   await mark('talents');
   stage = 'talents';
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.mouse.down = false; g.keys.clear();
-    g.points = 12; g.addXp(120); return 1; })()`);
+    g.addXp(120); return 1; })()`);
+  await evaluate(`(async () => { const g = window.__game; const { CARD_BY_ID } = await import('/src/rules.js');
+    g.cardDraft = ['g_chain', 'r_frost', 'c_dmg'].map(id => ({ ...CARD_BY_ID[id], stacks: 0, next: 1 }));
+    g.state = 'card'; g.hud.cardOpen(true); g.hud.renderCards(g); g.audio.cardDeal(); return 1; })()`);
+  await sleep(1600);
+  await clickSel('#cardRow .pickCard.gold');
+  await sleep(1000);
+  await evaluate(`(() => { const g = window.__game; g.clearField(); g.spawnQueue = [];
+    g.waveState = 'fight'; g.updateWaves(0.016); return 1; })()`);
+  await sleep(1400);
+  await tapKey('Digit2', 50);
+  await sleep(900);
   await tapKey('KeyT', 84);
-  await sleep(1200);
-  for (const id of ['t_dmg', 't_dmg', 't_storm', 't_hp', 't_shield', 't_speed', 't_slow', 't_storm2', 't_rage']) {
-    await clickSel(`#talentTree .tnode[data-talent="${id}"] button`);
-    await sleep(550);
-  }
-  await sleep(1200);
+  await sleep(1400);
   await tapKey('KeyT', 84);
   await sleep(500);
 

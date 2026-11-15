@@ -72,6 +72,10 @@ async function waitGame(gsec, timeoutMs = 180000) {
       console.log('bot died: auto-restart for demo stage');
       await evaluate('window.__game.start()');
     }
+    // 每波肃清会弹三选一强化卡；长跑演示阶段自动选第一张继续推进
+    if (s.state === 'card' && gsec >= 5) {
+      await evaluate('window.__game.pickCard(window.__game.cardDraft[0].id)');
+    }
     if (Date.now() - lastLog > 10000) {
       lastLog = Date.now();
       console.log('wait progress:', JSON.stringify(s));
@@ -548,38 +552,87 @@ try {
   await wheel(-120); await sleep(200);
   check('滚轮上滚切回霰弹枪', (await evaluate('window.__game.gunId')) === 'shotgun');
 
-  // ===== 成长线：经验 / 等级 / 天赋 / 技能 =====
+  // ===== 成长线：经验 / 等级 / 波次强化卡 / 技能 =====
+  // 每波肃清会弹三选一强化卡（新系统），确定性测试期间先挂起出怪，避免随机插入选卡界面
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
     g.p.iframes = 60; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
-    g.clearField(); g.spawnQueue = []; return 1; })()`);
+    g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999; return 1; })()`);
 
   const xp0 = await evaluate(`(() => { const g = window.__game; g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
     e.pos.set(2, 0, 2); e.hp = 1; const before = g.xpEarned; g.killEnemy(e); return { before, after: g.xpEarned }; })()`);
   check('击杀获得经验', xp0.after > xp0.before, `xpEarned ${xp0.before}->${xp0.after}`);
 
-  const lvl = await evaluate(`(() => { const g = window.__game; g.p.hp = 50; const l0 = g.level, p0 = g.points;
-    g.addXp(3000); return { l0, l1: g.level, p0, p1: g.points, hp: Math.round(g.p.hp) }; })()`);
-  check('升级获得天赋点', lvl.l1 > lvl.l0 && lvl.p1 > lvl.p0, JSON.stringify(lvl));
+  const lvl = await evaluate(`(() => { const g = window.__game; g.p.hp = 50; const l0 = g.level;
+    g.addXp(3000); return { l0, l1: g.level, hp: Math.round(g.p.hp), noPoints: !('points' in g) }; })()`);
+  check('升级提升等级（天赋点已移除）', lvl.l1 > lvl.l0 && lvl.noPoints, JSON.stringify(lvl));
   check('升级回复生命', lvl.hp > 50, `hp=${lvl.hp}`);
 
-  await tapT();
-  check('T 键打开天赋树并暂停', (await snap()).state === 'talent');
-  const tDom = await evaluate(`(() => ({ nodes: document.querySelectorAll('#talentTree .tnode').length, branches: document.querySelectorAll('#talentTree .branch').length, hidden: document.getElementById('talentScreen').classList.contains('hidden') }))()`);
-  check('天赋树渲染 3 分支 12 节点', tDom.nodes === 12 && tDom.branches === 3 && !tDom.hidden, JSON.stringify(tDom));
-  const ft0 = (await snap()).time; await sleep(800); const ft1 = (await snap()).time;
-  check('天赋树打开时战斗时间冻结', Math.abs(ft1 - ft0) < 0.05, `time ${ft0}->${ft1}`);
-  await shot('talent');
+  // 波次肃清 → 三选一强化卡
+  const draft = await evaluate(`(() => { const g = window.__game;
+    g.clearField(); g.spawnQueue = []; g.waveState = 'fight';
+    g.updateWaves(0.016);
+    const cards = [...document.querySelectorAll('#cardRow .pickCard')];
+    return { state: g.state, n: cards.length, ids: (g.cardDraft || []).map(c => c.id),
+      hidden: document.getElementById('cardScreen').classList.contains('hidden'),
+      badges: cards.map(c => c.querySelector('.rarBadge').textContent),
+      descs: cards.map(c => c.querySelector('.cdesc').textContent.length),
+      arts: cards.filter(c => c.querySelector('.art canvas')).length }; })()`);
+  check('每波肃清弹出 3 张互不相同的强化卡', draft.state === 'card' && draft.n === 3
+    && new Set(draft.ids).size === 3 && !draft.hidden, JSON.stringify(draft));
+  check('卡面含稀有度徽标 / 图标 / 效果描述', draft.arts === 3 && draft.badges.every(Boolean)
+    && draft.descs.every((n) => n > 4), JSON.stringify({ badges: draft.badges, descs: draft.descs }));
+  const cd0 = (await snap()).time; await sleep(800); const cd1 = (await snap()).time;
+  check('选卡期间战斗时间冻结', Math.abs(cd1 - cd0) < 0.05, `time ${cd0}->${cd1}`);
+  await shot('card-draft');
 
-  const dmg0 = await evaluate(`(() => { const g = window.__game; return { points: g.points, dmg: g.loadout.damage, rank: g.talents.t_dmg || 0 }; })()`);
-  await clickSel('#talentTree .tnode[data-talent="t_dmg"] button');
-  const dmg1 = await evaluate(`(() => { const g = window.__game; return { points: g.points, dmg: g.loadout.damage, rank: g.talents.t_dmg || 0 }; })()`);
-  check('点选天赋嘴强王者伤害 +8%', dmg1.rank === 1 && dmg1.points === dmg0.points - 1 && Math.abs(dmg1.dmg - dmg0.dmg * 1.08) < 0.01, JSON.stringify({ dmg0, dmg1 }));
+  await key('Escape', 27, true); await sleep(100); await key('Escape', 27, false); await sleep(200);
+  check('选卡必须三选一，Esc 无法跳过', (await snap()).state === 'card');
 
-  check('开局自带嘎嘎乱杀（等级解锁，无需天赋）', (await evaluate('window.__game.loadout.skills.storm')) === true);
-  await clickSel('#talentTree .tnode[data-talent="t_storm"] button');
-  check('点选乱杀强化提升技能数值', (await evaluate('window.__game.loadout.storm.damage')) === 75);
+  // 指定一张已知普通卡走完整点击流程，验证数值真实生效
+  await evaluate(`(async () => { const g = window.__game; const { CARD_BY_ID } = await import('/src/rules.js');
+    const c = CARD_BY_ID.c_dmg; g.cardDraft = [{ ...c, stacks: 0, next: 1 }];
+    g.state = 'card'; g.hud.cardOpen(true); g.hud.renderCards(g); return 1; })()`);
+  const dmg0 = await evaluate(`(() => { const g = window.__game; return { dmg: g.loadout.damage, rank: g.cards.c_dmg || 0, hist: g.cardHistory.length }; })()`);
+  await clickSel('#cardRow .pickCard[data-card="c_dmg"]');
+  const dmg1 = await evaluate(`(() => { const g = window.__game; return { dmg: g.loadout.damage, rank: g.cards.c_dmg || 0,
+    hist: g.cardHistory.length, state: g.state, draft: g.cardDraft,
+    hidden: document.getElementById('cardScreen').classList.contains('hidden'),
+    chip: document.getElementById('cardChip').textContent }; })()`);
+  check('点选普通卡「尖嘴利喙」伤害 +12%', dmg1.rank === 1 && Math.abs(dmg1.dmg - dmg0.dmg * 1.12) < 0.01,
+    JSON.stringify({ dmg0, dmg1 }));
+  check('选卡后关闭面板、回到战斗、HUD 层数 +1',
+    dmg1.state === 'playing' && dmg1.hidden && dmg1.draft === null && dmg1.hist === dmg0.hist + 1
+    && +dmg1.chip === dmg0.hist + 1, JSON.stringify(dmg1));
+
+  // 数字键直选第二张
+  await evaluate(`(() => { const g = window.__game; g.clearField(); g.spawnQueue = [];
+    g.waveState = 'fight'; g.updateWaves(0.016); return 1; })()`);
+  const k2 = await evaluate('window.__game.cardDraft.map(c => c.id)');
+  await key('Digit2', 50, true); await sleep(120); await key('Digit2', 50, false); await sleep(250);
+  const k2s = await evaluate(`(() => { const g = window.__game; return { state: g.state, got: g.cards['${k2[1]}'] || 0 }; })()`);
+  check('数字键 2 直选第二张卡', k2s.state === 'playing' && k2s.got === 1, JSON.stringify({ pick: k2[1], ...k2s }));
+
+  // 卡牌图鉴（T 键）
   await tapT();
-  check('T 键关闭天赋树恢复战斗', (await snap()).state === 'playing');
+  check('T 键打开卡牌图鉴并暂停', (await snap()).state === 'cardbook');
+  const book = await evaluate(`(() => { const g = window.__game;
+    return { cards: document.querySelectorAll('#cardBookGrid .bookCard').length,
+      kinds: new Set(g.cardHistory).size,
+      hidden: document.getElementById('cardBookScreen').classList.contains('hidden'),
+      total: document.getElementById('cardBookCount').textContent }; })()`);
+  check('图鉴列出已获卡牌与总层数', book.cards === book.kinds && book.cards >= 2 && !book.hidden
+    && book.total.includes(`${book.kinds} 种`), JSON.stringify(book));
+  const bt0 = (await snap()).time; await sleep(800); const bt1 = (await snap()).time;
+  check('图鉴打开时战斗时间冻结', Math.abs(bt1 - bt0) < 0.05, `time ${bt0}->${bt1}`);
+  await shot('card-book');
+  await tapT();
+  check('T 键关闭图鉴恢复战斗', (await snap()).state === 'playing');
+
+  check('开局自带嘎嘎乱杀（等级解锁，无需卡牌）', (await evaluate('window.__game.loadout.skills.storm')) === true);
+  await evaluate(`(() => { const g = window.__game; g.cards.g_storm = 1; g.recomputeLoadout(); return 1; })()`);
+  check('金卡「乱杀精通」提升技能数值', (await evaluate('window.__game.loadout.storm.damage')) === 100);
+  await evaluate(`(() => { const g = window.__game; delete g.cards.g_storm; g.recomputeLoadout();
+    g.waveState = 'inter'; g.interT = 9999; return 1; })()`);
 
   const stormSetup = await evaluate(`(() => { const g = window.__game;
     g.clearField();
@@ -596,12 +649,8 @@ try {
     g.level = 3; g.recomputeLoadout(); const at3 = g.loadout.skills.shield;
     return { at2, at3 }; })()`);
   check('抱头蹲防恰在 Lv.3 解锁（Lv.2 仍锁定）', shieldGate.at2 === false && shieldGate.at3 === true, JSON.stringify(shieldGate));
-  await tapT();
-  await clickSel('#talentTree .tnode[data-talent="t_hp"] button');
-  await clickSel('#talentTree .tnode[data-talent="t_shield"] button');
-  await tapT();
   await key('Digit2', 50, true); await sleep(120); await key('Digit2', 50, false); await sleep(250);
-  const shieldOn = await evaluate(`(() => { const g = window.__game; return { shield: g.p.shield, shieldT: +g.p.shieldT.toFixed(1), cd: +g.skillCd.shield.toFixed(1), bar: document.getElementById('shieldBar').classList.contains('on') }; })()`);
+  const shieldOn = await evaluate(`(() => { const g = window.__game; return { shield: g.p.shield, shieldT: +g.p.shieldSkillT.toFixed(1), cd: +g.skillCd.shield.toFixed(1), bar: document.getElementById('shieldBar').classList.contains('on') }; })()`);
   check('Digit2 抱头蹲防展开护盾条', shieldOn.shield > 0 && shieldOn.shieldT > 0 && shieldOn.cd > 15 && shieldOn.bar, JSON.stringify(shieldOn));
   const absorb = await evaluate(`(() => { const g = window.__game; g.p.iframes = 0; const h = g.p.hp; g.damagePlayer(20); return { h: Math.round(h), after: Math.round(g.p.hp), shield: Math.round(g.p.shield) }; })()`);
   check('抱头蹲防吸收伤害不扣血', absorb.after === absorb.h && absorb.shield < shieldOn.shield, JSON.stringify(absorb));
@@ -623,18 +672,10 @@ try {
     g.level = 9; g.recomputeLoadout(); const at9 = g.loadout.skills.slow;
     return { at8, at9 }; })()`);
   check('嘎瓦鲁多恰在 Lv.9 解锁（Lv.8 仍锁定）', slowGate.at8 === false && slowGate.at9 === true, JSON.stringify(slowGate));
-  await tapT();
-  await clickSel('#talentTree .tnode[data-talent="t_speed"] button');
-  await clickSel('#talentTree .tnode[data-talent="t_slow"] button');
-  await tapT();
   await key('Digit4', 52, true); await sleep(120); await key('Digit4', 52, false); await sleep(250);
   const slowOn = await evaluate(`(() => { const g = window.__game; return { slowT: +g.slowT.toFixed(1), factor: g.slowFactor, cd: +g.skillCd.slow.toFixed(1) }; })()`);
   check('Digit4 释放嘎瓦鲁多减速敌人', slowOn.slowT > 4 && slowOn.factor < 1 && slowOn.cd > 20, JSON.stringify(slowOn));
 
-  await tapT();
-  await clickSel('#talentTree .tnode[data-talent="t_storm2"] button');
-  await clickSel('#talentTree .tnode[data-talent="t_rage"] button');
-  await tapT();
   await key('Digit3', 51, true); await sleep(120); await key('Digit3', 51, false); await sleep(250);
   const rageOn = await evaluate(`(() => { const g = window.__game; return { rageT: +g.p.rageT.toFixed(1), cd: +g.skillCd.rage.toFixed(1) }; })()`);
   check('Digit3 释放红温暴走', rageOn.rageT > 5 && rageOn.cd > 18, JSON.stringify(rageOn));
@@ -732,7 +773,7 @@ try {
     g.spawnEnemy({ type: 'brawler', elite: true });
     const e = g.enemies[g.enemies.length - 1];
     e.pos.set(6, 0, 7); e.duck.group.position.copy(e.pos);
-    g.p.pos.set(9, 0, 10); g.p.vel.set(0, 0, 0); g.p.iframes = 0; g.p.shieldT = 0; g.p.shield = 0; g.p.hp = g.p.maxHp;
+    g.p.pos.set(9, 0, 10); g.p.vel.set(0, 0, 0); g.p.iframes = 0; g.p.shieldSkillT = 0; g.p.shield = 0; g.p.hp = g.p.maxHp;
     e.skillCd = 0;
     return 1; })()`);
   await waitGame(0.3);
@@ -759,7 +800,7 @@ try {
     g.spawnEnemy('boss');
     const b = g.enemies.find(e => e.type === 'boss');
     b.pos.set(-8, 0, -8); b.duck.group.position.copy(b.pos); b.fireT = 99;
-    g.p.pos.set(20, 0, 20); g.p.vel.set(0, 0, 0); g.p.iframes = 0; g.p.shieldT = 0; g.p.shield = 0; g.p.hp = g.p.maxHp;
+    g.p.pos.set(20, 0, 20); g.p.vel.set(0, 0, 0); g.p.iframes = 0; g.p.shieldSkillT = 0; g.p.shield = 0; g.p.hp = g.p.maxHp;
     b.skillCd = 0;
     return 1; })()`);
   await waitGame(0.3);
@@ -778,7 +819,7 @@ try {
   const bs2 = await evaluate(`(() => { const g = window.__game; return { hp: g.p.hp, max: g.p.maxHp }; })()`);
   check('Boss 全图技能远距离仍命中', bs2.hp < bs2.max, JSON.stringify(bs2));
   await evaluate(`(() => { const g = window.__game; const b = g.enemies.find(e => e.type === 'boss');
-    b.skillCd = 0; b.skillT = 0; g.p.hp = g.p.maxHp; g.p.iframes = 0; g.p.shieldT = 0; g.p.shield = 0; return 1; })()`);
+    b.skillCd = 0; b.skillT = 0; g.p.hp = g.p.maxHp; g.p.iframes = 0; g.p.shieldSkillT = 0; g.p.shield = 0; return 1; })()`);
   let bs3 = null;
   for (let i = 0; i < 50; i++) {
     bs3 = await evaluate(`(() => { const g = window.__game; const b = g.enemies.find(e => e.type === 'boss');
@@ -883,8 +924,9 @@ try {
   // fragile 调试模式跨重开保持
   const fragileHp = await evaluate(`(() => { const g = window.__game; g.fragile = true; g.start(); return g.p.hp; })()`);
   check('fragile 模式重开保持 1 HP', fragileHp === 1, `hp=${fragileHp}`);
-  const fragileGear = await evaluate(`(() => { const g = window.__game; g.coins = 9999; g.buyGood('helmet'); g.points = 5; g.buyTalent('t_hp'); return { maxHp: g.p.maxHp, hp: g.p.hp }; })()`);
-  check('fragile 模式买装备/天赋仍保持 1 HP', fragileGear.maxHp === 1 && fragileGear.hp === 1, JSON.stringify(fragileGear));
+  const fragileGear = await evaluate(`(() => { const g = window.__game; g.coins = 9999; g.buyGood('helmet');
+    g.cards.c_hp = 3; g.recomputeLoadout(); return { maxHp: g.p.maxHp, hp: g.p.hp, loMax: g.loadout.maxHp }; })()`);
+  check('fragile 模式买装备/叠生命卡仍保持 1 HP', fragileGear.maxHp === 1 && fragileGear.hp === 1 && fragileGear.loMax > 1, JSON.stringify(fragileGear));
   await evaluate(`(() => { const g = window.__game; g.fragile = false; g.start(); return 1; })()`);
 
   // 720p 战斗美景截图

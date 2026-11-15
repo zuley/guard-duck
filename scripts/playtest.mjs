@@ -97,7 +97,8 @@ async function ensurePlaying() {
   if (st === 'paused') await ev('window.__game.resume()');
   if (st === 'title' || st === 'over') await ev('window.__game.start()');
   if (st === 'shop') await ev('window.__game.closeShop()');
-  if (st === 'talent') await ev('window.__game.closeTalents()');
+  if (st === 'cardbook') await ev('window.__game.closeCardBook()');
+  if (st === 'card') await ev('window.__game.pickCard(window.__game.cardDraft[0].id)');
   await sleep(120);
 }
 const clearKeys = () => ev('window.__game.keys.clear(); window.__game.mouse.down = false; window.__game.mouseFire = false;');
@@ -196,7 +197,7 @@ try {
   // ---------- V5 Boss 预警独立通道不被技能 toast 覆盖 ----------
   await ensurePlaying();
   const bossFound = await ev(`(() => { const g = window.__game;
-    g.talents = { t_hp: 1 }; g.level = Math.max(g.level, 3); g.recomputeLoadout();
+    g.cards = { c_hp: 1 }; g.level = Math.max(g.level, 3); g.recomputeLoadout();
     g.nextWave(); g.spawnQueue = [];
     g.spawnEnemy('boss');
     return g.enemies.some(e => e.type === 'boss' && !e.dead); })()`);
@@ -302,7 +303,7 @@ try {
 
   // ---------- V11 死亡结算延迟可跳过 ----------
   await ensurePlaying();
-  await ev(`(() => { const g = window.__game; g.p.iframes = 0; g.p.shieldT = 0; g.damagePlayer(99999); })()`);
+  await ev(`(() => { const g = window.__game; g.p.iframes = 0; g.p.shieldSkillT = 0; g.damagePlayer(99999); })()`);
   await sleep(200);
   const v11before = await ev(`document.getElementById('gameoverScreen').classList.contains('hidden')`);
   await tap('KeyB', 66);
@@ -317,17 +318,17 @@ try {
   await ev(`(() => { localStorage.removeItem('swyy_best'); localStorage.removeItem('swyy_best_bot'); localStorage.removeItem('swyy_best_fragile'); })()`);
   await ev('window.__game.start()');
   await sleep(200);
-  await ev(`(() => { const g = window.__game; g.p.iframes = 0; g.p.shieldT = 0; g.damagePlayer(99999); })()`);
+  await ev(`(() => { const g = window.__game; g.p.iframes = 0; g.p.shieldSkillT = 0; g.damagePlayer(99999); })()`);
   await sleep(200);
   const v12a = await ev(`localStorage.getItem('swyy_best')`);
   await ev('window.__game.start()');
   await sleep(200);
-  await ev(`(() => { const g = window.__game; g.score = 100; g.p.iframes = 0; g.p.shieldT = 0; g.damagePlayer(99999); })()`);
+  await ev(`(() => { const g = window.__game; g.score = 100; g.p.iframes = 0; g.p.shieldSkillT = 0; g.damagePlayer(99999); })()`);
   await sleep(200);
   const v12b = await ev(`(() => ({ best: localStorage.getItem('swyy_best'), badge: !document.getElementById('recordBadge').classList.contains('hidden') }))()`);
   await ev('window.__game.start()');
   await sleep(200);
-  await ev(`(() => { const g = window.__game; g.score = 100; g.p.iframes = 0; g.p.shieldT = 0; g.damagePlayer(99999); })()`);
+  await ev(`(() => { const g = window.__game; g.score = 100; g.p.iframes = 0; g.p.shieldSkillT = 0; g.damagePlayer(99999); })()`);
   await sleep(200);
   const v12c = await ev(`(() => ({ badge: !document.getElementById('recordBadge').classList.contains('hidden') }))()`);
   await ev(`(() => { const g = window.__game; g.bot = true; g.start(); g.score = 99999; g.p.iframes = 0; g.damagePlayer(99999); })()`);

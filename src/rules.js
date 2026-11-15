@@ -376,47 +376,149 @@ export function xpForKill(type, elite = false) {
   return Math.max(2, Math.round(((t ? t.score : 0) / 10) * (elite ? ELITE.scoreMul : 1)));
 }
 
-export const TALENT_BRANCHES = [
-  { id: 'fire', label: '火力', color: 0xff5346, desc: '输出拉满，嘎嘎乱杀' },
-  { id: 'guard', label: '守护', color: 0x7ee06a, desc: '苟住别浪，活着才有输出' },
-  { id: 'swift', label: '迅捷', color: 0x6fd6ff, desc: '打不过就跑，跑得快' },
+/* ---------------- 波次天赋卡（三选一肉鸽抽卡） ---------------- */
+
+// 三档稀有度：普通=固定数值，稀有(绿)/传说(金)=附带特效，金色最强。
+// weight 是抽卡权重（普通 70 / 绿 22 / 金 8），金绿都是低概率惊喜。
+export const CARD_RARITIES = {
+  common: { id: 'common', label: '普通', weight: 70, color: 0xd8d2c4, css: '#d8d2c4', glow: 'rgba(216,210,196,.45)', order: 0 },
+  rare: { id: 'rare', label: '稀有', weight: 22, color: 0x7ee06a, css: '#7ee06a', glow: 'rgba(126,224,106,.6)', order: 1 },
+  gold: { id: 'gold', label: '传说', weight: 8, color: 0xffc63a, css: '#ffc63a', glow: 'rgba(255,198,58,.75)', order: 2 },
+};
+
+// 每张卡可重复抽取叠层（max 层封顶）。desc(n) 描述「叠到第 n 层」时的效果，
+// 抽卡界面预览 desc(当前层数+1)，已获列表展示 desc(当前层数)。
+export const CARDS = [
+  // ---- 普通：固定属性 ----
+  { id: 'c_dmg', rarity: 'common', name: '尖嘴利喙', icon: '喙', max: 5, tag: '火力', desc: (n) => `子弹伤害 +${12 * n}%` },
+  { id: 'c_hp', rarity: 'common', name: '贴秋膘', icon: '膘', max: 5, tag: '生存', desc: (n) => `生命上限 +${25 * n}` },
+  { id: 'c_speed', rarity: 'common', name: '冲鸭', icon: '冲', max: 4, tag: '机动', desc: (n) => `移动速度 +${8 * n}%` },
+  { id: 'c_reload', rarity: 'common', name: '快手换弹', icon: '换', max: 3, tag: '火力', desc: (n) => `换弹速度 +${[0, 18, 33, 45][n]}%` },
+  { id: 'c_mag', rarity: 'common', name: '加长弹匣', icon: '匣', max: 3, tag: '火力', desc: (n) => `弹匣容量 +${25 * n}%` },
+  { id: 'c_rate', rarity: 'common', name: '狂热扣扳', icon: '速', max: 4, tag: '火力', desc: (n) => `射速 +${12 * n}%` },
+  { id: 'c_dash', rarity: 'common', name: '溜了溜了', icon: '溜', max: 3, tag: '机动', desc: (n) => `冲刺冷却 -${[0, 18, 32, 44][n]}%` },
+  { id: 'c_armor', rarity: 'common', name: '硬羽绒', icon: '甲', max: 3, tag: '生存', desc: (n) => `受到伤害 -${[0, 12, 22, 30][n]}%` },
+  { id: 'c_spread', rarity: 'common', name: '稳如老鸭', icon: '稳', max: 3, tag: '火力', desc: (n) => `子弹散布 -${[0, 22, 38, 50][n]}%` },
+  { id: 'c_regen', rarity: 'common', name: '自愈绒毛', icon: '愈', max: 3, tag: '生存', desc: (n) => `脱战回血 ${4 + 3 * n}/秒` },
+  { id: 'c_coin', rarity: 'common', name: '财迷鸭', icon: '财', max: 3, tag: '收益', desc: (n) => `击杀金币 +${25 * n}%` },
+  { id: 'c_xp', rarity: 'common', name: '好学鸭', icon: '学', max: 3, tag: '收益', desc: (n) => `获得经验 +${25 * n}%` },
+  { id: 'c_range', rarity: 'common', name: '加长枪管', icon: '远', max: 3, tag: '火力', desc: (n) => `射程 +${18 * n}% · 衰减后移` },
+  { id: 'c_ammo', rarity: 'common', name: '弹药囤积', icon: '囤', max: 3, tag: '续航', desc: (n) => `立即 +48 备弹 · 弹药箱拾取 +${50 * n}%` },
+
+  // ---- 稀有（绿）：附带特效 ----
+  { id: 'r_explosive', rarity: 'rare', name: '爆破弹', icon: '爆', max: 3, tag: '特效', desc: (n) => `命中引爆：半径 ${(2 + 0.4 * n).toFixed(1)} 造成 ${35 + 10 * n}% 溅射伤害` },
+  { id: 'r_pierce', rarity: 'rare', name: '穿甲弹', icon: '穿', max: 2, tag: '特效', desc: (n) => `子弹穿透 ${n} 个敌人后继续飞行` },
+  { id: 'r_frost', rarity: 'rare', name: '霜冻弹', icon: '霜', max: 2, tag: '特效', desc: (n) => `命中减速 ${40 + 10 * n}% 持续 ${(2 + 0.5 * n).toFixed(1)}s` },
+  { id: 'r_lifesteal', rarity: 'rare', name: '吸血喙', icon: '吸', max: 3, tag: '特效', desc: (n) => `造成伤害的 ${5 * n}% 转为生命` },
+  { id: 'r_crit', rarity: 'rare', name: '致命一击', icon: '暴', max: 3, tag: '特效', desc: (n) => `${15 + 7 * n}% 概率暴击，伤害 ×${(2 + 0.2 * n).toFixed(1)}` },
+  { id: 'r_thorns', rarity: 'rare', name: '荆棘羽绒', icon: '棘', max: 2, tag: '特效', desc: (n) => `受击反弹：半径 3 内敌人受 ${25 * n} 伤害` },
+  { id: 'r_killheal', rarity: 'rare', name: '吃鸭补鸭', icon: '补', max: 3, tag: '特效', desc: (n) => `击杀回复 ${6 * n} 生命 · 溢出治疗转护盾（上限 ${20 * n}）` },
+  { id: 'r_waveShield', rarity: 'rare', name: '开工护盾', icon: '盾', max: 3, tag: '特效', desc: (n) => `每波开始获得 ${60 * n} 点护盾` },
+  { id: 'r_dashBlast', rarity: 'rare', name: '铁头冲撞', icon: '撞', max: 2, tag: '特效', desc: (n) => `冲刺撞击造成 ${30 * n} 伤害并强力击退` },
+  { id: 'r_burn', rarity: 'rare', name: '燃烧弹', icon: '燃', max: 2, tag: '特效', desc: (n) => `命中点燃：${8 * n} 伤害/秒，持续 3s` },
+  { id: 'r_magnet', rarity: 'rare', name: '拾取磁铁', icon: '磁', max: 2, tag: '特效', desc: (n) => `拾取范围 ×${(1 + 1.4 * n).toFixed(1)} · 每次拾取回血 ${4 * n}` },
+  { id: 'r_ammoBack', rarity: 'rare', name: '弹药回收', icon: '收', max: 2, tag: '特效', desc: (n) => `击杀有 ${25 * n}% 概率回收 2 发备弹` },
+
+  // ---- 传说（金）：最强特效 ----
+  { id: 'g_chain', rarity: 'gold', name: '连锁闪电', icon: '链', max: 2, tag: '传说', desc: (n) => `命中电击弹射 ${n + 1} 个附近敌人，各受 ${60 + 15 * n}% 伤害` },
+  { id: 'g_orbit', rarity: 'gold', name: '护卫羽毛', icon: '卫', max: 2, tag: '传说', desc: (n) => `${2 + n} 枚羽毛环绕自身，接触每秒造成 ${30 + 15 * n} 伤害` },
+  { id: 'g_execute', rarity: 'gold', name: '处决喙', icon: '决', max: 2, tag: '传说', desc: (n) => `命中血量低于 ${15 + 7 * n}% 的敌人直接处决（Boss 阈值减半）` },
+  { id: 'g_phoenix', rarity: 'gold', name: '不死鸟', icon: '凰', max: 1, tag: '传说', desc: () => '本局首次致死伤害时复活，回复 60% 生命并击退全场' },
+  { id: 'g_berserk', rarity: 'gold', name: '血怒', icon: '怒', max: 2, tag: '传说', desc: (n) => `生命越低伤害越高，残血时最高 +${50 + 20 * n}%` },
+  { id: 'g_multishot', rarity: 'gold', name: '双管齐下', icon: '双', max: 2, tag: '传说', desc: (n) => `每次射击额外发射 ${n} 发平行子弹` },
+  { id: 'g_guardian', rarity: 'gold', name: '守护结界', icon: '界', max: 2, tag: '传说', desc: (n) => `每 ${n > 1 ? 6 : 9} 秒自动完全抵挡一次伤害` },
+  { id: 'g_goldRush', rarity: 'gold', name: '点金术', icon: '金', max: 2, tag: '传说', desc: (n) => `击杀金币 ×${1 + n} · 击杀额外掉落鸭杂` },
+  { id: 'g_timeKill', rarity: 'gold', name: '时停收割', icon: '停', max: 2, tag: '传说', desc: (n) => `击杀有 ${12 + 8 * n}% 概率触发全场减速 ${(1.2 + 0.4 * n).toFixed(1)}s` },
+  { id: 'g_storm', rarity: 'gold', name: '乱杀精通', icon: '杀', max: 3, tag: '传说', desc: (n) => `「嘎嘎乱杀」伤害 +${40 * n} · 半径 +${(1.2 * n).toFixed(1)} · 冷却 -${15 * n}%` },
 ];
 
-export const TALENTS = [
-  { id: 't_dmg', branch: 'fire', tier: 1, label: '嘴强王者', name: '嘴强王者', max: 3, req: null, desc: (r) => `子弹伤害 +${8 * (r + 1)}%` },
-  { id: 't_storm', branch: 'fire', tier: 2, label: '乱杀强化', name: '乱杀强化', max: 1, req: 't_dmg', skill: 'storm', desc: () => '「嘎嘎乱杀」伤害 +15 · 半径 +0.5' },
-  { id: 't_storm2', branch: 'fire', tier: 3, label: '杀疯了', name: '杀疯了', max: 2, req: 't_storm', desc: (r) => `乱杀伤害 +${25 * (r + 1)} · 半径 +${(0.8 * (r + 1)).toFixed(1)}` },
-  { id: 't_rage', branch: 'fire', tier: 4, label: '红温强化', name: '红温强化', max: 1, req: 't_storm2', skill: 'rage', desc: () => '「红温暴走」持续 +2s · 伤害再 +10%' },
-  { id: 't_hp', branch: 'guard', tier: 1, label: '贴秋膘', name: '贴秋膘', max: 3, req: null, desc: (r) => `生命上限 +${20 * (r + 1)}` },
-  { id: 't_shield', branch: 'guard', tier: 2, label: '蹲防强化', name: '蹲防强化', max: 1, req: 't_hp', skill: 'shield', desc: () => '「抱头蹲防」护盾 +30 · 持续 +1s' },
-  { id: 't_shield2', branch: 'guard', tier: 3, label: '加厚羽绒', name: '加厚羽绒', max: 2, req: 't_shield', desc: (r) => `蹲防护盾 +${40 * (r + 1)} · 持续 +${2 * (r + 1)}s` },
-  { id: 't_regen', branch: 'guard', tier: 4, label: '吃鸭补鸭', name: '吃鸭补鸭', max: 2, req: 't_shield2', desc: (r) => `每次击杀回复 ${4 * (r + 1)} 生命` },
-  { id: 't_speed', branch: 'swift', tier: 1, label: '冲鸭', name: '冲鸭', max: 3, req: null, desc: (r) => `移动速度 +${6 * (r + 1)}%` },
-  { id: 't_slow', branch: 'swift', tier: 2, label: '时停强化', name: '时停强化', max: 1, req: 't_speed', skill: 'slow', desc: () => '「嘎瓦鲁多」持续 +1s · 敌人更慢' },
-  { id: 't_slow2', branch: 'swift', tier: 3, label: '时停续杯', name: '时停续杯', max: 2, req: 't_slow', desc: (r) => `减速持续 +${1.5 * (r + 1)}s · 敌人更慢` },
-  { id: 't_dash', branch: 'swift', tier: 4, label: '溜了溜了', name: '溜了溜了', max: 2, req: 't_slow2', desc: (r) => `冲刺冷却 -${20 * (r + 1)}%` },
-];
+export const CARD_BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));
 
-export function talentNext(id, ranks = 0) {
-  const t = TALENTS.find((x) => x.id === id);
-  if (!t || ranks >= t.max) return null;
-  return { rank: ranks + 1, cost: 1 };
+// 叠到上限的卡不再进入抽卡池
+export function cardAvailable(card, owned = {}) {
+  return (owned[card.id] || 0) < card.max;
 }
 
-export function talentEffects(ranks = {}, level = 1) {
-  const r = (id) => ranks[id] || 0;
+export function rollCardRarity(rng) {
+  const list = Object.values(CARD_RARITIES);
+  const total = list.reduce((a, r) => a + r.weight, 0);
+  let roll = rng() * total;
+  for (const r of list) { roll -= r.weight; if (roll < 0) return r.id; }
+  return 'common';
+}
+
+// 抽 count 张互不相同的卡。Boss 波（每 5 波）保底一张金卡作为通关奖励；
+// 某档稀有度抽空时降级到其它可用档，保证永远凑满 count 张（卡池枯竭则少于 count）。
+export function rollCards(rng, owned = {}, wave = 1, count = 3) {
+  const pool = CARDS.filter((c) => cardAvailable(c, owned));
+  const picked = [];
+  const take = (rarity) => {
+    let cand = pool.filter((c) => c.rarity === rarity && !picked.includes(c));
+    if (!cand.length) cand = pool.filter((c) => !picked.includes(c));
+    if (!cand.length) return null;
+    const c = cand[Math.floor(rng() * cand.length) % cand.length];
+    picked.push(c);
+    return c;
+  };
+  if (wave > 0 && wave % 5 === 0) take('gold');
+  while (picked.length < Math.min(count, pool.length)) take(rollCardRarity(rng));
+  return picked.map((c) => ({ ...c, stacks: owned[c.id] || 0, next: (owned[c.id] || 0) + 1 }));
+}
+
+// 卡牌层数 → 战斗数值。mods 是特效描述集合，game.js 按存在与否启用对应机制。
+export function cardEffects(owned = {}, level = 1) {
+  const r = (id) => owned[id] || 0;
+  const mods = {};
+  if (r('r_explosive')) mods.explosive = { radius: 2 + 0.4 * r('r_explosive'), mul: 0.35 + 0.1 * r('r_explosive') };
+  if (r('r_pierce')) mods.pierce = r('r_pierce');
+  if (r('r_frost')) mods.frost = { factor: 1 - (0.4 + 0.1 * r('r_frost')), duration: 2 + 0.5 * r('r_frost') };
+  if (r('r_lifesteal')) mods.lifesteal = 0.05 * r('r_lifesteal');
+  if (r('r_crit')) mods.crit = { chance: 0.15 + 0.07 * r('r_crit'), mul: 2 + 0.2 * r('r_crit') };
+  if (r('r_thorns')) mods.thorns = { radius: 3, damage: 25 * r('r_thorns') };
+  if (r('r_waveShield')) mods.waveShield = 60 * r('r_waveShield');
+  if (r('r_dashBlast')) mods.dashBlast = { damage: 30 * r('r_dashBlast'), knock: 9 };
+  if (r('r_burn')) mods.burn = { dps: 8 * r('r_burn'), duration: 3 };
+  if (r('r_magnet')) mods.magnet = { mul: 1 + 1.4 * r('r_magnet'), heal: 4 * r('r_magnet') };
+  if (r('r_ammoBack')) mods.ammoBack = 0.25 * r('r_ammoBack');
+  // 吃鸭补鸭：击杀回血 + 溢出治疗转护盾，让「回血卡」在满血时也不浪费
+  if (r('r_killheal')) mods.overheal = 20 * r('r_killheal');
+  if (r('g_chain')) mods.chain = { count: r('g_chain') + 1, mul: 0.6 + 0.15 * r('g_chain') };
+  if (r('g_orbit')) mods.orbit = { count: 2 + r('g_orbit'), dps: 30 + 15 * r('g_orbit') };
+  if (r('g_execute')) mods.execute = 0.15 + 0.07 * r('g_execute');
+  if (r('g_phoenix')) mods.phoenix = true;
+  if (r('g_berserk')) mods.berserk = 0.5 + 0.2 * r('g_berserk');
+  if (r('g_multishot')) mods.multishot = r('g_multishot');
+  if (r('g_guardian')) mods.guardian = r('g_guardian') > 1 ? 6 : 9;
+  if (r('g_goldRush')) mods.goldRush = 1 + r('g_goldRush');
+  if (r('g_timeKill')) mods.timeKill = { chance: 0.12 + 0.08 * r('g_timeKill'), duration: 1.2 + 0.4 * r('g_timeKill') };
   return {
-    dmgBonus: 1 + 0.08 * r('t_dmg'),
-    maxHpBonus: 20 * r('t_hp'),
-    speedBonus: 1 + 0.06 * r('t_speed'),
-    killHeal: 4 * r('t_regen'),
-    dashCdMul: 1 - 0.2 * r('t_dash'),
-    // 技能解锁只看等级（开局1个，每3级+1）；天赋树只强化技能数值
+    dmgBonus: 1 + 0.12 * r('c_dmg'),
+    maxHpBonus: 25 * r('c_hp'),
+    speedBonus: 1 + 0.08 * r('c_speed'),
+    reloadMul: [1, 0.82, 0.67, 0.55][r('c_reload')],
+    magMul: 1 + 0.25 * r('c_mag'),
+    rateMul: 1 + 0.12 * r('c_rate'),
+    dashCdMul: [1, 0.82, 0.68, 0.56][r('c_dash')],
+    armorMul: [1, 0.88, 0.78, 0.7][r('c_armor')],
+    spreadMul: [1, 0.78, 0.62, 0.5][r('c_spread')],
+    regen: 4 + 3 * r('c_regen'),
+    coinMul: 1 + 0.25 * r('c_coin'),
+    xpMul: 1 + 0.25 * r('c_xp'),
+    rangeMul: 1 + 0.18 * r('c_range'),
+    ammoPickupMul: 1 + 0.5 * r('c_ammo'),
+    killHeal: 6 * r('r_killheal'),
+    // 技能解锁只看等级（开局1个，每3级+1）；金卡「乱杀精通」强化乱杀数值
     skills: skillsForLevel(level),
-    storm: { damage: 60 + 15 * r('t_storm') + 25 * r('t_storm2'), radius: 4.5 + 0.5 * r('t_storm') + 0.8 * r('t_storm2'), knock: 6 },
-    shield: { pool: 80 + 30 * r('t_shield') + 40 * r('t_shield2'), duration: 6 + 1 * r('t_shield') + 2 * r('t_shield2') },
-    rage: { duration: 6 + 2 * r('t_rage'), rpmMul: 1.45, dmgMul: 1.35 + 0.1 * r('t_rage') },
-    slow: { duration: 5 + 1 * r('t_slow') + 1.5 * r('t_slow2'), factor: 0.35 - 0.05 * r('t_slow') - 0.1 * r('t_slow2') },
+    storm: {
+      damage: 60 + 40 * r('g_storm'),
+      radius: 4.5 + 1.2 * r('g_storm'),
+      knock: 6,
+      cdMul: 1 - 0.15 * r('g_storm'),
+    },
+    shield: { pool: 80, duration: 6 },
+    rage: { duration: 6, rpmMul: 1.45, dmgMul: 1.35 },
+    slow: { duration: 5, factor: 0.35 },
+    mods,
   };
 }
 
@@ -439,19 +541,35 @@ export function skillsForLevel(level) {
   return Object.fromEntries(SKILLS.map((s, i) => [s.id, i < n]));
 }
 
-export function applyTalents(lo, ef) {
+// 装备数值 × 卡牌加成。射程延长时衰减区间同比后移，避免「加射程却全程最低伤」。
+export function applyCards(lo, ef) {
+  const rm = ef.rangeMul ?? 1;
   return {
     ...lo,
     damage: lo.damage * ef.dmgBonus,
     maxHp: lo.maxHp + ef.maxHpBonus,
     speedMul: lo.speedMul * ef.speedBonus,
+    rpm: lo.rpm * (ef.rateMul ?? 1),
+    magSize: Math.round(lo.magSize * (ef.magMul ?? 1)),
+    reloadTime: lo.reloadTime * (ef.reloadMul ?? 1),
+    spreadMul: lo.spreadMul * (ef.spreadMul ?? 1),
+    dmgMul: lo.dmgMul * (ef.armorMul ?? 1),
+    range: lo.range * rm,
+    falloffStart: lo.gun.falloffStart * rm,
+    falloffEnd: lo.gun.falloffEnd * rm,
+    falloffMin: lo.gun.falloffMin,
     dashCdMul: ef.dashCdMul,
     killHeal: ef.killHeal,
+    regen: ef.regen ?? 4,
+    coinMul: ef.coinMul ?? 1,
+    xpMul: ef.xpMul ?? 1,
+    ammoPickupMul: ef.ammoPickupMul ?? 1,
     skills: ef.skills,
     storm: ef.storm,
     shield: ef.shield,
     rage: ef.rage,
     slow: ef.slow,
+    mods: ef.mods || {},
   };
 }
 /* ---------------- 准星落点预测 ---------------- */
