@@ -86,23 +86,36 @@ async function mouse(type, x, y, button = 'left') {
 }
 async function clickAt(x, y) { await mouse('mousePressed', x, y); await sleep(80); await mouse('mouseReleased', x, y); }
 async function clickSel(sel) {
-  const r = await evaluate(`(() => { const b = document.querySelector('${sel}'); if (!b) return null; const rc = b.getBoundingClientRect(); return { x: rc.x + rc.width / 2, y: rc.y + rc.height / 2 }; })()`);
-  if (!r) throw new Error('element not found: ' + sel);
-  await clickAt(r.x, r.y);
-}
-async function clickText(sel, text) {
-  const r = await evaluate(`(() => { const b = [...document.querySelectorAll('${sel}')].find(x => x.textContent.trim() === '${text}'); if (!b) return null; const rc = b.getBoundingClientRect(); return { x: rc.x + rc.width / 2, y: rc.y + rc.height / 2 }; })()`);
-  if (!r) throw new Error('button not found: ' + text);
+  const r = await evaluate(`(() => { const b = document.querySelector(${JSON.stringify(sel)});
+    if (!b || b.disabled || !b.getClientRects().length) return null;
+    b.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const rc = b.getBoundingClientRect(); return { x: rc.x + rc.width / 2, y: rc.y + rc.height / 2 }; })()`);
+  if (!r) throw new Error('visible, enabled element not found: ' + sel);
   await clickAt(r.x, r.y);
 }
 const aimAt = (x, y, z) => evaluate(`(() => { const g = window.__game;
   const v = new (g.engine.camera.position.constructor)(${x}, ${y}, ${z}); v.project(g.engine.camera);
   return { x: (v.x + 1) / 2 * ${W}, y: (1 - v.y) / 2 * ${H} }; })()`).then((p) => mouse('mouseMoved', p.x, p.y));
 
-const clearField = () => evaluate(`(() => { const g = window.__game;
-  g.clearField(); g.spawnQueue = [];
-  for (const b of g.ebullets) if (b.spr) g.engine.scene.remove(b.spr);
-  g.ebullets = []; return 1; })()`);
+const clearField = () => {
+  if (stage === 'talents') throw new Error('Choose showcase cards explicitly before clearing');
+  return evaluate(`(() => { const g = window.__game;
+    // clearField 会清掉 cardDraft 却不会退出 card；必须先真实选卡，再关菜单 / 清场。
+    if (g.state === 'card') {
+      const card = g.cardDraft?.[0];
+      if (!card) throw new Error('Missing pending card before staging');
+      g.pickCard(card.id);
+    }
+    if (g.state === 'weapons') g.closeWeapons();
+    if (g.state === 'cardbook') g.closeCardBook();
+    if (g.state === 'paused') g.resume();
+    if (g.state !== 'playing') throw new Error('Cannot stage from ' + g.state);
+    g.bot = false; g.keys.clear(); g.mouse.down = false; g.mouseFire = false;
+    g.clearField(); g.spawnQueue = [];
+    // 手动摆拍阶段不自动开新波；选卡分镜会显式触发肃清。
+    g.waveState = 'inter'; g.interT = 60;
+    return 1; })()`);
+};
 
 let stage = 'warmup';
 let keeper = null;
@@ -147,13 +160,13 @@ try {
   stage = 'beauty';
   await clickSel('#startBtn');
   await sleep(400);
+  await clearField();
   await evaluate(`(() => { const g = window.__game;
     window.__musicDest = g.audio.ctx.createMediaStreamDestination();
     g.audio.musicGain.connect(window.__musicDest);
     window.__recMusic = (() => { const mr = new MediaRecorder(window.__musicDest.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 192000 });
       const rec = { mr, chunks: [] }; mr.ondataavailable = (e) => rec.chunks.push(e.data); mr.start(250); return rec; })();
     g.bot = false; g.keys.clear(); g.mouse.down = false;
-    g.clearField(); g.spawnQueue = [];
     g.p.iframes = 999; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0);
     document.getElementById('hud').classList.remove('on');
     document.getElementById('crosshair').style.display = 'none';
@@ -168,15 +181,21 @@ try {
   // ---- combatA: bot 波次实战 ----
   await mark('combatA');
   stage = 'combatA';
+  await clearField();
   await evaluate(`(() => { const g = window.__game;
     g.engine.updateCamera = window.__origCam;
     document.getElementById('hud').classList.add('on');
     document.getElementById('crosshair').style.display = '';
-    g.coins = 2000; g.buyGood('repeater');
-    g.bot = true; g.p.iframes = 30; return 1; })()`);
+    g.coins = 2000; g.openWeapons(); g.buyGun('qwen'); g.closeWeapons();
+    g.interT = 0; g.bot = true; g.p.iframes = 30; return 1; })()`);
   keeper = setInterval(async () => {
     try {
       const s = await snap();
+      if (stage !== 'talents' && stage !== 'over' && s.state === 'card') {
+        await evaluate(`(() => { const g = window.__game;
+          if (g.state === 'card' && g.cardDraft?.[0]) g.pickCard(g.cardDraft[0].id);
+          return 1; })()`);
+      }
       if (s.state === 'paused') { await evaluate('window.__game.resume()'); console.log('auto-resume'); }
       if (stage !== 'over' && s.state === 'playing') await evaluate('window.__game.p.iframes = Math.max(window.__game.p.iframes, 6)');
       if (Date.now() - (keeper.lastLog || 0) > 5000) {
@@ -187,13 +206,14 @@ try {
   }, 1500);
   await sleep(8000);
 
-  // ---- combatB: 霰弹枪近距爆发 ----
+  // ---- combatB: GLM 霰弹枪近距爆发 ----
   await mark('combatB');
   stage = 'combatB';
-  await evaluate(`(() => { const g = window.__game; g.bot = false; g.keys.clear(); g.mouse.down = false;
-    g.coins = 2000; g.buyGood('shotgun'); g.p.mag = 6; g.p.reserve = 60; g.p.iframes = 30;
-    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); return 1; })()`);
   await clearField();
+  await evaluate(`(() => { const g = window.__game;
+    g.coins = 2000; g.openWeapons(); g.buyGun('glm'); g.closeWeapons();
+    g.p.mag = g.loadout.magSize; g.p.reserve = 60; g.p.iframes = 30;
+    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); return 1; })()`);
   await evaluate(`(() => { const g = window.__game;
     for (let i = 0; i < 5; i++) { const a = -0.55 + i * 0.27; const d = 2.6 + (i % 2) * 0.7;
       g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
@@ -226,10 +246,8 @@ try {
   // ---- combatD: 领导 Boss 特写 + 击杀掉落 ----
   await mark('combatD');
   stage = 'combatD';
+  await clearField();
   await evaluate(`(async () => { const g = window.__game; const { wavePlan } = await import('/src/rules.js');
-    g.clearField(); g.spawnQueue = [];
-    for (const b of g.ebullets) if (b.spr) g.engine.scene.remove(b.spr);
-    g.ebullets = [];
     g.wave = 5; g.plan = wavePlan(5); g.spawnEnemy('boss');
     const b = g.enemies.find(e => e.type === 'boss');
     g.bot = false; g.p.pos.set(0, 0, 0); g.p.iframes = 60; g.p.mag = 6; g.p.reserve = 60;
@@ -256,8 +274,8 @@ try {
   await sleep(2200);
 
   // ---- talents: 波次肃清三选一强化卡（真实点击选卡 + 图鉴） ----
+  stage = 'talents'; // 先停 keeper 自动选卡，再开始记录刻意展示的卡牌分镜。
   await mark('talents');
-  stage = 'talents';
   await evaluate(`(() => { const g = window.__game; g.bot = false; g.mouse.down = false; g.keys.clear();
     g.addXp(120); return 1; })()`);
   await evaluate(`(async () => { const g = window.__game; const { CARD_BY_ID } = await import('/src/rules.js');
@@ -266,7 +284,9 @@ try {
   await sleep(1600);
   await clickSel('#cardRow .pickCard.gold');
   await sleep(1000);
-  await evaluate(`(() => { const g = window.__game; g.clearField(); g.spawnQueue = [];
+  await evaluate(`(() => { const g = window.__game;
+    if (g.state !== 'playing') throw new Error('Showcase card was not selected');
+    g.clearField(); g.spawnQueue = [];
     g.waveState = 'fight'; g.updateWaves(0.016); return 1; })()`);
   await sleep(1400);
   await tapKey('Digit2', 50);
@@ -310,41 +330,67 @@ try {
   await tapKey('Digit4', 52); // 嘎瓦鲁多
   await sleep(3000);
 
-  // ---- shop: 购买 / 升阶 / 出售 + 护具特写 ----
+  // ---- shop: 最小武器面板（沿用旧标记）；三把付费枪真实购买，再切回免费 Claude ----
   await mark('shop');
   stage = 'shop';
-  await evaluate(`(() => { const g = window.__game; g.bot = false; g.mouse.down = false; g.keys.clear();
-    g.coins = 3000; Object.assign(g.inv, { head: 1, neck: 2, wing: 2, feather: 4, blood: 2 });
+  await clearField();
+  await evaluate(`(() => { const g = window.__game;
+    // 独立分镜重置武器所有权，确保付费枪通过可见点击购买，而不是预先赠送。
+    g.equipGun('claude'); g.ownedGuns = ['claude']; g.mags = { claude: g.p.mag };
+    g.coins = 1600; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
     return 1; })()`);
   await tapKey('KeyB', 66);
   await sleep(1000);
-  await clickText('#buyPane button', '购买 260'); await sleep(600); // 盔甲 I
-  await clickText('#buyPane button', '升级 520'); await sleep(600); // 盔甲 II
-  await clickText('#buyPane button', '购买 200'); await sleep(600); // 头盔
-  await clickText('#buyPane button', '购买 150'); await sleep(600); // 鞋子
-  await clickText('#buyPane button', '购买 120'); await sleep(600); // 手套
-  await clickText('.shopTabs button', '出售背包'); await sleep(900);
-  await clickText('#sellPane button', '全卖'); await sleep(900);
-  await clickText('.shopTabs button', '购买装备'); await sleep(600);
+  for (const id of ['qwen', 'glm', 'codex', 'claude']) {
+    await clickSel(`#weaponGrid .weaponCard[data-gun="${id}"]`);
+    await sleep(850);
+    const equipped = await evaluate(`(() => { const g = window.__game;
+      return g.state === 'weapons' && g.gunId === '${id}' && g.ownedGuns.includes('${id}'); })()`);
+    if (!equipped) throw new Error('Visible weapon purchase/equip failed: ' + id);
+  }
   await tapKey('KeyB', 66);
   await sleep(500);
+
+  // ---- benefits: 展示名称 / 实体，真实走近拾取并结算金币与即时效果 ----
+  stage = 'benefits';
+  await mark('benefits');
   await clearField();
-  await evaluate(`(() => { const g = window.__game; g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.iframes = 60;
-    const du = g.playerDuck; window.__origDuckUpdate = du.update.bind(du);
-    du.update = (dt, st) => window.__origDuckUpdate(dt, Object.assign({}, st, { aimYaw: 0.62, moving: false }));
-    const t0 = performance.now();
-    g.engine.updateCamera = () => { const p = g.p.pos; const a = (performance.now() - t0) / 1000 * 0.25 + 0.7;
-      g.engine.camera.position.set(p.x + Math.sin(a) * 2.6, 1.5, p.z + Math.cos(a) * 2.6);
-      g.engine.camera.lookAt(p.x, 0.72, p.z); };
-    return 1; })()`);
-  await sleep(4000);
+  const benefits = await evaluate(`(async () => { const g = window.__game;
+    const { LOOT_ITEMS } = await import('/src/rules.js');
+    g.engine.updateCamera = window.__origCam;
+    g.p.pos.set(0, 0, 0); g.p.vel.set(0, 0, 0); g.p.reserve = 24;
+    return LOOT_ITEMS.map(({ id, coins, effect }) => ({ id, coins, heal: ['heal', 'fullheal'].includes(effect.kind) })); })()`);
+  for (const [i, benefit] of benefits.entries()) {
+    const direction = i % 2 === 0 ? 1 : -1;
+    const before = await evaluate(`(() => { const g = window.__game;
+      g.p.vel.set(0, 0, 0);
+      if (${benefit.heal}) { g.p.hp = Math.max(1, g.p.maxHp * 0.3); g.p.lastHurt = g.time; }
+      const pos = g.p.pos.clone();
+      // 先放在磁铁吸取范围之外，让信封 / 礼盒 / 咖啡与标签有完整展示时间。
+      pos.x += ${direction} * Math.max(3, 1.1 * (g.loadout.mods.magnet?.mul || 1) * 2.6 + 0.8);
+      g.spawnPickup(pos, 'loot', '${benefit.id}'); return g.coins; })()`);
+    await sleep(1000);
+    const code = direction > 0 ? 'KeyD' : 'KeyA', vk = direction > 0 ? 68 : 65;
+    let collected = false;
+    await key(code, vk, true);
+    try {
+      for (let j = 0; j < 40; j++) {
+        await sleep(100);
+        collected = await evaluate(`(() => { const g = window.__game;
+          return !g.pickups.some(p => p.kind === 'loot' && p.item === '${benefit.id}')
+            && g.coins === ${before + benefit.coins}; })()`);
+        if (collected) break;
+      }
+    } finally { await key(code, vk, false); }
+    if (!collected) throw new Error('Benefit pickup failed: ' + benefit.id);
+    await sleep(650);
+  }
 
   // ---- over: 阵亡结算 ----
   await mark('over');
   stage = 'over';
   await evaluate(`(() => { const g = window.__game;
     g.engine.updateCamera = window.__origCam;
-    g.playerDuck.update = window.__origDuckUpdate;
     g.p.iframes = 0; g.damagePlayer(9999); return 1; })()`);
   await sleep(5500);
   await mark('end');

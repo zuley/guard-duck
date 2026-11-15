@@ -1,5 +1,5 @@
 export const WEAPON = {
-  name: '「谷仓」卡宾枪',
+  name: 'Claude 步枪',
   magSize: 24,
   reserveStart: 96,
   rpm: 540,
@@ -246,18 +246,18 @@ export function rollDrop(rng, type, ammoLow = false, elite = false) {
   return rng() < 0.55 ? 'ammo' : 'health';
 }
 
+// 打工人战利品：拾取即结算金币 + 一个即时效果（effect 字段供 game.js 派发）。
+// 稀有度越高金币越多、效果越强；weight 是掉落权重（越稀有越低）。
 export const LOOT_ITEMS = [
-  { id: 'head', label: '鸭头', price: 20, weight: 4, color: 0xe8a05c },
-  { id: 'neck', label: '鸭脖', price: 16, weight: 6, color: 0xd08850 },
-  { id: 'clavicle', label: '鸭锁骨', price: 14, weight: 6, color: 0xc87840 },
-  { id: 'wing', label: '鸭翅', price: 12, weight: 8, color: 0xe0b070 },
-  { id: 'foot', label: '鸭掌', price: 10, weight: 8, color: 0xf08c1e },
-  { id: 'gizzard', label: '鸭胗', price: 8, weight: 9, color: 0xa05038 },
-  { id: 'liver', label: '鸭肝', price: 8, weight: 9, color: 0x8a4030 },
-  { id: 'intestine', label: '鸭肠', price: 6, weight: 10, color: 0xe8c090 },
-  { id: 'esophagus', label: '鸭食管', price: 6, weight: 8, color: 0xd8b080 },
-  { id: 'blood', label: '鸭血', price: 4, weight: 10, color: 0xa02828 },
-  { id: 'feather', label: '鸭毛', price: 3, weight: 12, color: 0xf0e6d0 },
+  { id: 'subsidy', label: '高温补贴', coins: 6, weight: 14, color: 0xffb070, effect: { kind: 'heal', amount: 10 }, desc: '+6 金币 · 回血 10' },
+  { id: 'welfare', label: '节日福利', coins: 10, weight: 12, color: 0xff7ab8, effect: { kind: 'shield', amount: 20, cap: 120 }, desc: '+10 金币 · 护盾 +20（上限 120）' },
+  { id: 'salary', label: '本月工资', coins: 14, weight: 11, color: 0x7ee06a, effect: { kind: 'heal', amount: 25 }, desc: '+14 金币 · 回血 25' },
+  { id: 'coffee', label: '下午茶', coins: 8, weight: 12, color: 0xc89060, effect: { kind: 'haste', duration: 5 }, desc: '+8 金币 · 移速 +25% 5s' },
+  { id: 'overtime', label: '加班费', coins: 18, weight: 9, color: 0x9fe8ff, effect: { kind: 'ammo', amount: 16 }, desc: '+18 金币 · 备弹 +16' },
+  { id: 'performance', label: '季度绩效', coins: 24, weight: 7, color: 0x6fd6ff, effect: { kind: 'xp', amount: 30 }, desc: '+24 金币 · 经验 +30' },
+  { id: 'bonus', label: '项目奖金', coins: 32, weight: 5, color: 0xffd95e, effect: { kind: 'rage', duration: 4 }, desc: '+32 金币 · 红温 4s' },
+  { id: 'yearbonus', label: '年终奖', coins: 60, weight: 2, color: 0xffc63a, effect: { kind: 'heal', amount: 60 }, desc: '+60 金币 · 回血 60' },
+  { id: 'stock', label: '期权激励', coins: 88, weight: 1, color: 0xffe9a8, effect: { kind: 'fullheal' }, desc: '+88 金币 · 生命全满' },
 ];
 
 export function coinsFor(type, elite = false) {
@@ -280,89 +280,39 @@ export function rollLoot(rng) {
   return out;
 }
 
+// AI 模型主题武器：初始 Claude 免费，其余用金币在武器面板购买。
+// accent 用于图标 / 曳光配色，tag 是风味标语。
 export const GUNS = {
-  carbine: { label: '「谷仓」卡宾枪', price: 0, model: 'rifle', damage: 26, rpm: 540, magSize: 24, reloadTime: 1.6, bulletSpeed: 70, spreadBase: 0.012, pellets: 1, range: 34, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55 },
-  repeater: { label: '「牧群」连发枪', price: 320, model: 'rifle', damage: 20, rpm: 780, magSize: 36, reloadTime: 1.7, bulletSpeed: 74, spreadBase: 0.016, pellets: 1, range: 30, falloffStart: 16, falloffEnd: 30, falloffMin: 0.5 },
-  shotgun: { label: '「干草」霰弹枪', price: 400, model: 'shotgun', damage: 15, rpm: 150, magSize: 6, reloadTime: 2.0, bulletSpeed: 55, spreadBase: 0.035, pellets: 6, pelletSpread: 0.1, range: 18, falloffStart: 9, falloffEnd: 18, falloffMin: 0.3 },
-  longrifle: { label: '「守夜」重步枪', price: 620, model: 'rifle', damage: 46, rpm: 300, magSize: 16, reloadTime: 1.9, bulletSpeed: 90, spreadBase: 0.006, pellets: 1, range: 55, falloffStart: 30, falloffEnd: 55, falloffMin: 0.75 },
+  claude: { label: 'Claude 步枪', tag: '深思熟虑 · 稳定输出', accent: 0xd97757, price: 0, model: 'rifle', damage: 26, rpm: 540, magSize: 24, reloadTime: 1.6, bulletSpeed: 70, spreadBase: 0.012, pellets: 1, range: 34, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55 },
+  qwen: { label: 'Qwen 连发枪', tag: '千问千答 · 火力压制', accent: 0x615ced, price: 320, model: 'rifle', damage: 20, rpm: 780, magSize: 36, reloadTime: 1.7, bulletSpeed: 74, spreadBase: 0.016, pellets: 1, range: 30, falloffStart: 16, falloffEnd: 30, falloffMin: 0.5 },
+  glm: { label: 'GLM 霰弹枪', tag: '智谱清言 · 近距爆发', accent: 0x3b82f6, price: 400, model: 'shotgun', damage: 15, rpm: 150, magSize: 6, reloadTime: 2.0, bulletSpeed: 55, spreadBase: 0.035, pellets: 6, pelletSpread: 0.1, range: 18, falloffStart: 9, falloffEnd: 18, falloffMin: 0.3 },
+  codex: { label: 'Codex 重步枪', tag: '代码生成 · 远程狙杀', accent: 0x10a37f, price: 620, model: 'rifle', damage: 46, rpm: 300, magSize: 16, reloadTime: 1.9, bulletSpeed: 90, spreadBase: 0.006, pellets: 1, range: 55, falloffStart: 30, falloffEnd: 55, falloffMin: 0.75 },
 };
 
-export const GEAR = {
-  armor: {
-    label: '盔甲',
-    levels: [
-      { price: 260, desc: '受到伤害 -30%' },
-      { price: 520, desc: '受到伤害 -45%' },
-      { price: 880, desc: '受到伤害 -60%' },
-    ],
-  },
-  helmet: {
-    label: '头盔',
-    levels: [
-      { price: 200, desc: '生命上限 +30' },
-      { price: 420, desc: '生命上限 +60' },
-      { price: 760, desc: '生命上限 +100' },
-    ],
-  },
-  shoes: {
-    label: '鞋子',
-    levels: [
-      { price: 150, desc: '移动速度 +15%' },
-      { price: 320, desc: '移动速度 +25%' },
-      { price: 560, desc: '移动速度 +35%' },
-    ],
-  },
-  gloves: {
-    label: '手套',
-    levels: [
-      { price: 120, desc: '换弹 -30% · 散布 -25%' },
-      { price: 280, desc: '换弹 -45% · 散布 -40%' },
-      { price: 500, desc: '换弹 -60% · 散布 -50%' },
-    ],
-  },
-};
-
-export function gearNext(id, level = 0) {
-  const g = GEAR[id];
-  if (!g || level >= g.levels.length) return null;
-  const l = g.levels[level];
-  return { level: level + 1, price: l.price, desc: l.desc };
+// 武器面板目录：只卖枪，无护具、无弹药、无出售。
+export function gunCatalog() {
+  return Object.entries(GUNS).map(([id, g]) => ({
+    id, label: g.label, tag: g.tag, price: g.price, accent: g.accent,
+    desc: `${g.damage} 伤害 · ${g.rpm} 射速 · ${g.magSize} 弹匣 · 射程 ${g.range}${g.pellets > 1 ? ` · ${g.pellets} 弹丸` : ''}`,
+  }));
 }
 
-const gearLevel = (v) => (v === true ? 1 : (v || 0));
-
-export function computeLoadout(gunId, gear = {}) {
-  const g = GUNS[gunId] || GUNS.carbine;
-  const armor = gearLevel(gear.armor);
-  const helmet = gearLevel(gear.helmet);
-  const shoes = gearLevel(gear.shoes);
-  const gloves = gearLevel(gear.gloves);
+export function computeLoadout(gunId) {
+  const g = GUNS[gunId] || GUNS.claude;
   return {
     gun: g,
     damage: g.damage,
     rpm: g.rpm,
     magSize: g.magSize,
-    reloadTime: g.reloadTime * [1, 0.7, 0.55, 0.4][gloves],
+    reloadTime: g.reloadTime,
     bulletSpeed: g.bulletSpeed,
     range: g.range,
     pellets: g.pellets,
-    spreadMul: [1, 0.75, 0.6, 0.5][gloves],
-    speedMul: [1, 1.15, 1.25, 1.35][shoes],
-    dmgMul: [1, 0.7, 0.55, 0.4][armor],
-    maxHp: 100 + [0, 30, 60, 100][helmet],
+    spreadMul: 1,
+    speedMul: 1,
+    dmgMul: 1,
+    maxHp: 100,
   };
-}
-
-export function shopCatalog() {
-  const guns = Object.entries(GUNS)
-    .filter(([, g]) => g.price > 0)
-    .map(([id, g]) => ({
-      id, kind: 'gun', label: g.label, price: g.price,
-      desc: `${g.damage} 伤害 · ${g.rpm} 射速 · ${g.magSize} 弹匣 · 射程 ${g.range}${g.pellets > 1 ? ` · ${g.pellets} 弹丸` : ''}`,
-    }));
-  const ammo = [{ id: 'ammo', kind: 'ammo', label: '子弹箱', price: 60, desc: '备弹 +48 · 全枪通用' }];
-  const gear = Object.entries(GEAR).map(([id, g]) => ({ id, kind: 'gear', label: g.label, price: g.levels[0].price, desc: g.levels[0].desc }));
-  return [...guns, ...ammo, ...gear];
 }
 
 export const WAVE_CLEAR_XP = 25;
@@ -427,7 +377,7 @@ export const CARDS = [
   { id: 'g_berserk', rarity: 'gold', name: '血怒', icon: '怒', max: 2, tag: '传说', desc: (n) => `生命越低伤害越高，残血时最高 +${50 + 20 * n}%` },
   { id: 'g_multishot', rarity: 'gold', name: '双管齐下', icon: '双', max: 2, tag: '传说', desc: (n) => `每次射击额外发射 ${n} 发平行子弹` },
   { id: 'g_guardian', rarity: 'gold', name: '守护结界', icon: '界', max: 2, tag: '传说', desc: (n) => `每 ${n > 1 ? 6 : 9} 秒自动完全抵挡一次伤害` },
-  { id: 'g_goldRush', rarity: 'gold', name: '点金术', icon: '金', max: 2, tag: '传说', desc: (n) => `击杀金币 ×${1 + n} · 击杀额外掉落鸭杂` },
+  { id: 'g_goldRush', rarity: 'gold', name: '点金术', icon: '金', max: 2, tag: '传说', desc: (n) => `击杀金币 ×${1 + n} · 击杀额外掉落打工人福利` },
   { id: 'g_timeKill', rarity: 'gold', name: '时停收割', icon: '停', max: 2, tag: '传说', desc: (n) => `击杀有 ${12 + 8 * n}% 概率触发全场减速 ${(1.2 + 0.4 * n).toFixed(1)}s` },
   { id: 'g_storm', rarity: 'gold', name: '乱杀精通', icon: '杀', max: 3, tag: '传说', desc: (n) => `「嘎嘎乱杀」伤害 +${40 * n} · 半径 +${(1.2 * n).toFixed(1)} · 冷却 -${15 * n}%` },
 ];
@@ -541,7 +491,7 @@ export function skillsForLevel(level) {
   return Object.fromEntries(SKILLS.map((s, i) => [s.id, i < n]));
 }
 
-// 装备数值 × 卡牌加成。射程延长时衰减区间同比后移，避免「加射程却全程最低伤」。
+// 武器数值 × 卡牌加成。射程延长时衰减区间同比后移，避免「加射程却全程最低伤」。
 export function applyCards(lo, ef) {
   const rm = ef.rangeMul ?? 1;
   return {

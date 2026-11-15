@@ -1,52 +1,42 @@
-import { shopCatalog, LOOT_ITEMS, gearNext, CARD_BY_ID, CARD_RARITIES, SKILLS } from './rules.js';
+import { gunCatalog, GUNS, CARD_BY_ID, CARD_RARITIES, SKILLS } from './rules.js';
 
 const $ = (id) => document.getElementById(id);
 
-function itemIcon(id) {
+// 自绘枪械轮廓；颜色呼应枪身与曳光，不使用任何厂商标志。
+function weaponIcon(id) {
   const c = document.createElement('canvas');
   c.width = 64; c.height = 64;
+  c.setAttribute('aria-hidden', 'true');
   const x = c.getContext('2d');
-  x.lineCap = 'round'; x.lineJoin = 'round';
+  const accent = '#' + (GUNS[id]?.accent ?? 0xd97757).toString(16).padStart(6, '0');
   const box = (bx, by, w, h, col) => { x.fillStyle = col; x.fillRect(bx, by, w, h); };
-  const circ = (cx, cy, r, col) => { x.fillStyle = col; x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill(); };
-  const poly = (pts, col) => { x.fillStyle = col; x.beginPath(); x.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) x.lineTo(p[0], p[1]); x.closePath(); x.fill(); };
-  const metal = '#4a5058', wood = '#8a5a2e', steel = '#8a9098';
-  if (id === 'carbine' || id === 'repeater' || id === 'longrifle') {
-    box(6, 30, 40, 7, metal); box(44, 31, 14, 4, metal);
-    poly([[6, 30], [16, 30], [12, 44], [4, 44]], wood);
-    box(24, 37, 7, 12, metal); box(30, 26, 3, 5, metal);
-    if (id === 'repeater') box(24, 37, 9, 16, metal);
-    if (id === 'longrifle') { box(20, 22, 16, 5, metal); circ(36, 24, 3, steel); }
-  } else if (id === 'shotgun') {
-    box(8, 28, 42, 6, metal); box(8, 35, 42, 5, metal);
-    poly([[8, 28], [18, 28], [14, 46], [4, 46]], wood);
-    box(28, 40, 12, 7, wood);
-  } else if (id === 'ammo') {
-    box(10, 20, 44, 30, '#6a5a3a'); box(10, 30, 44, 8, '#ffd95e');
-    box(10, 20, 44, 4, '#57492e');
-  } else if (id === 'armor') {
-    poly([[16, 12], [48, 12], [52, 34], [32, 54], [12, 34]], '#6a7a5a');
-    poly([[24, 12], [40, 12], [32, 24]], '#59684b');
-  } else if (id === 'helmet') {
-    x.fillStyle = steel; x.beginPath(); x.arc(32, 34, 20, Math.PI, 0); x.fill();
-    box(10, 32, 44, 6, '#6a6f76');
-  } else if (id === 'shoes') {
-    poly([[14, 14], [28, 14], [30, 34], [50, 40], [50, 50], [14, 50]], '#7a4a26');
-    box(14, 46, 36, 5, '#5a3418');
-  } else if (id === 'gloves') {
-    circ(30, 30, 14, '#b03028'); box(24, 40, 14, 12, '#8a2018'); circ(44, 26, 6, '#b03028');
+  const poly = (pts, col) => {
+    x.fillStyle = col; x.beginPath(); x.moveTo(...pts[0]);
+    for (const p of pts.slice(1)) x.lineTo(...p);
+    x.closePath(); x.fill();
+  };
+  x.translate(32, 32); x.rotate(-0.22); x.translate(-32, -32);
+  const metal = '#b8c2ce', dark = '#414b5b';
+  poly([[5, 28], [17, 28], [15, 40], [4, 43]], accent);
+  if (id === 'glm') {
+    box(17, 25, 39, 5, metal); box(17, 32, 39, 5, metal);
+    box(16, 24, 17, 15, dark); box(29, 35, 14, 8, accent);
+    box(49, 24, 8, 14, dark);
   } else {
-    const it = LOOT_ITEMS.find((l) => l.id === id);
-    const col = '#' + (it ? it.color : 0xffffff).toString(16).padStart(6, '0');
-    if (id === 'feather') poly([[32, 6], [44, 26], [32, 58], [20, 26]], col);
-    else if (id === 'blood') { x.fillStyle = col; x.beginPath(); x.moveTo(32, 8); x.quadraticCurveTo(50, 34, 32, 54); x.quadraticCurveTo(14, 34, 32, 8); x.fill(); }
-    else if (id === 'intestine' || id === 'esophagus') { x.strokeStyle = col; x.lineWidth = 7; x.beginPath(); x.moveTo(12, 20); x.bezierCurveTo(52, 12, 12, 40, 52, 44); x.stroke(); }
-    else if (id === 'wing') poly([[10, 40], [30, 12], [38, 20], [24, 44], [44, 26], [50, 34], [30, 52]], col);
-    else if (id === 'foot') poly([[32, 10], [36, 30], [52, 44], [32, 40], [12, 44], [28, 30]], col);
-    else if (id === 'head') { circ(32, 28, 16, col); poly([[44, 24], [58, 30], [44, 36]], '#f08c1e'); circ(26, 24, 3, '#20180a'); }
-    else if (id === 'neck') { x.strokeStyle = col; x.lineWidth = 12; x.beginPath(); x.moveTo(20, 10); x.lineTo(40, 54); x.stroke(); }
-    else if (id === 'clavicle') { x.strokeStyle = col; x.lineWidth = 8; x.beginPath(); x.moveTo(12, 24); x.lineTo(52, 24); x.moveTo(32, 24); x.lineTo(32, 52); x.stroke(); }
-    else circ(32, 32, 18, col);
+    box(15, 26, id === 'qwen' ? 28 : 31, 11, dark);
+    box(43, 29, id === 'codex' ? 19 : 15, 4, metal);
+    box(18, 27, id === 'qwen' ? 22 : 16, 7, accent);
+    poly([[24, 37], [32, 37], [30, id === 'qwen' ? 52 : 47], [22, id === 'qwen' ? 52 : 47]], metal);
+    box(34, 36, 4, 7, dark);
+    if (id === 'codex') {
+      box(25, 19, 20, 6, dark); box(26, 20, 4, 4, accent);
+      box(32, 24, 4, 3, metal); box(45, 30, 13, 2, accent);
+    } else if (id === 'qwen') {
+      box(36, 28, 2, 5, metal); box(40, 28, 2, 5, metal);
+      box(20, 23, 18, 2, metal);
+    } else {
+      box(30, 22, 3, 4, metal); box(42, 26, 3, 10, accent);
+    }
   }
   return c;
 }
@@ -65,8 +55,8 @@ export class HUD {
       start: $('startScreen'), pause: $('pauseScreen'), over: $('gameoverScreen'),
       resWave: $('resWave'), resKills: $('resKills'), resScore: $('resScore'), resAcc: $('resAcc'),
       fps: $('fps'), loading: $('loading'),
-      statCoins: $('statCoins'), shop: $('shopScreen'), shopCoins: $('shopCoins'),
-      buyPane: $('buyPane'), sellPane: $('sellPane'), tabBuy: $('tabBuy'), tabSell: $('tabSell'), tip: $('tip'),
+      statCoins: $('statCoins'), weapons: $('weaponScreen'), weaponCoins: $('weaponCoins'),
+      weaponGrid: $('weaponGrid'),
       statRemain: $('statRemain'), resTime: $('resTime'), resCoins: $('resCoins'),
       resBest: $('resBest'), recordBadge: $('recordBadge'),
       levelBadge: $('levelBadge'), xpFill: $('xpFill'), xpText: $('xpText'), cardChip: $('cardChip'),
@@ -144,7 +134,7 @@ export class HUD {
       this._gunIconId = gunId;
       const x = this.el.gunIcon.getContext('2d');
       x.clearRect(0, 0, 64, 64);
-      x.drawImage(itemIcon(gunId), 0, 0);
+      x.drawImage(weaponIcon(gunId), 0, 0);
     }
   }
 
@@ -185,12 +175,15 @@ export class HUD {
 
   cardOpen(on) {
     this.el.card.classList.toggle('hidden', !on);
-    if (!on && document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    this.el.card.inert = !on;
+    if (!on && this.el.card.contains(document.activeElement)) document.activeElement.blur();
   }
 
   cardBookOpen(on) {
     this.el.cardBook.classList.toggle('hidden', !on);
-    if (!on && document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    this.el.cardBook.inert = !on;
+    if (on) $('cardBookClose').focus();
+    else if (this.el.cardBook.contains(document.activeElement)) document.activeElement.blur();
   }
 
   // 卡面图标：稀有度配色的程序化 canvas 徽记，金色额外描边光芒
@@ -360,163 +353,59 @@ export class HUD {
     }
   }
 
-  shopOpen(on) {
-    this.el.shop.classList.toggle('hidden', !on);
-    if (on) this.shopTab('buy');
-    else {
-      this.hideTip();
-      // 关闭时释放焦点，避免隐藏格子残留焦点被空格/回车误触
-      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-    }
+  weaponsOpen(on) {
+    this.el.weapons.classList.toggle('hidden', !on);
+    this.el.weapons.inert = !on;
+    if (on) this.el.crosshair.style.display = 'none';
+    else if (this.el.weapons.contains(document.activeElement)) document.activeElement.blur();
   }
 
-  shopTab(tab) {
-    const buy = tab === 'buy';
-    this.el.tabBuy.classList.toggle('sel', buy);
-    this.el.tabSell.classList.toggle('sel', !buy);
-    this.el.buyPane.classList.toggle('hidden', !buy);
-    this.el.sellPane.classList.toggle('hidden', buy);
-    this.hideTip();
-  }
-
-  showTip(data, rect) {
-    const tip = this.el.tip;
-    tip.textContent = '';
-    const put = (cls, text, tag = 'div') => {
-      const n = document.createElement(tag);
-      n.className = cls;
-      n.textContent = text;
-      tip.appendChild(n);
-    };
-    put('', data.title, 'b');
-    put('kind', data.kind);
-    put('desc', data.desc);
-    put('tprice', data.price);
-    put('hint', data.hint);
-    tip.classList.remove('hidden');
-    const w = tip.offsetWidth, h = tip.offsetHeight;
-    let left = rect.right + 12;
-    if (left + w > innerWidth - 8) left = rect.left - w - 12;
-    tip.style.left = left + 'px';
-    tip.style.top = Math.max(8, Math.min(rect.top - 6, innerHeight - h - 8)) + 'px';
-  }
-
-  hideTip() { this.el.tip.classList.add('hidden'); }
-
-  bindTile(tile, html, action) {
-    tile.addEventListener('mouseenter', () => this.showTip(html, tile.getBoundingClientRect()));
-    tile.addEventListener('mouseleave', () => this.hideTip());
-    tile.addEventListener('focus', () => this.showTip(html, tile.getBoundingClientRect()));
-    tile.addEventListener('blur', () => this.hideTip());
-    tile.addEventListener('click', () => { if (action) action(); });
-    tile.addEventListener('keydown', (e) => {
-      // preventDefault 阻止空格的原生 click 激活，避免「一次按键买两次」
-      if ((e.key === 'Enter' || e.key === ' ') && action) { e.preventDefault(); action(); }
-    });
-  }
-
-  renderShop(game) {
-    this.el.shopCoins.textContent = game.coins;
-    this.hideTip();
-    // 记录当前聚焦格子，重渲染后恢复焦点（键盘/手柄连续购买不丢焦点）
-    const ae = document.activeElement;
-    const refocus = ae && ae.dataset
-      ? (ae.dataset.good ? `[data-good="${ae.dataset.good}"]` : ae.dataset.loot ? `[data-loot="${ae.dataset.loot}"]` : null)
-      : null;
-    const grid = this.el.buyPane;
+  renderWeapons(game) {
+    this.el.weaponCoins.textContent = game.coins;
+    // 购买后仍聚焦同一把枪，键盘与手柄可连续操作；首次打开聚焦当前装备。
+    const focused = document.activeElement?.closest('.weaponCard')?.dataset.gun;
+    const grid = this.el.weaponGrid;
     grid.textContent = '';
-    for (const good of shopCatalog()) {
-      const tile = document.createElement('div');
-      tile.className = 'tile';
-      tile.tabIndex = 0;
-      tile.dataset.good = good.id;
-      tile.appendChild(itemIcon(good.id));
-      const price = document.createElement('span');
-      price.className = 'price';
-      let desc = good.desc, kind = '补给', hint = '点击购买', action = null, state = '';
-      if (good.kind === 'gun') {
-        kind = '武器';
-        price.textContent = good.price;
-        const owned = game.ownedGuns.includes(good.id);
-        const equipped = game.gunId === good.id;
-        if (equipped) { state = '已装备'; hint = '当前装备'; }
-        else if (owned) { hint = '点击装备'; action = () => { game.equipGun(good.id); game.hud.renderShop(game); }; }
-        else if (game.coins >= good.price) action = () => game.buyGood(good.id);
-        else hint = '金币不足';
-      } else if (good.kind === 'gear') {
-        kind = '护具';
-        const cur = game.gear[good.id] || 0;
-        const next = gearNext(good.id, cur);
-        if (cur) {
-          const lvl = document.createElement('span');
-          lvl.className = 'lvl';
-          lvl.textContent = ['Ⅰ', 'Ⅱ', 'Ⅲ'][cur - 1];
-          tile.appendChild(lvl);
-        }
-        if (!next) { price.textContent = 'MAX'; state = '已满级'; hint = '已满级'; }
-        else {
-          price.textContent = next.price;
-          desc = next.desc;
-          hint = cur ? '点击升级' : '点击购买';
-          if (game.coins >= next.price) action = () => game.buyGood(good.id);
-          else hint = '金币不足';
-        }
-      } else {
-        price.textContent = good.price;
-        if (game.coins >= good.price) action = () => game.buyGood(good.id);
-        else hint = '金币不足';
+    for (const good of gunCatalog()) {
+      const gun = GUNS[good.id];
+      const owned = game.ownedGuns.includes(good.id);
+      const equipped = game.gunId === good.id;
+      const affordable = owned || game.coins >= good.price;
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = `weaponCard${equipped ? ' equipped' : ''}${!affordable ? ' cant' : ''}`;
+      tile.dataset.gun = good.id;
+      tile.style.setProperty('--gun-accent', '#' + good.accent.toString(16).padStart(6, '0'));
+      tile.setAttribute('aria-pressed', String(equipped));
+      tile.setAttribute('aria-disabled', String(!affordable || equipped));
+      const put = (cls, text, tag = 'span') => {
+        const el = document.createElement(tag);
+        el.className = cls; el.textContent = text;
+        return el;
+      };
+      const art = put('weaponArt', '');
+      art.appendChild(weaponIcon(good.id));
+      const stats = put('weaponStats', '');
+      for (const [label, value] of [
+        ['伤害', gun.pellets > 1 ? `${gun.damage} × ${gun.pellets}` : gun.damage],
+        ['射速', `${gun.rpm}/分`], ['弹匣', gun.magSize], ['射程', `${gun.range}m`],
+      ]) {
+        const row = put('', '');
+        row.append(put('', label), put('', value, 'b'));
+        stats.appendChild(row);
       }
-      if (!action && !state) tile.classList.add('cant');
-      tile.appendChild(price);
-      if (state) {
-        const st = document.createElement('span');
-        st.className = 'state';
-        st.textContent = state;
-        tile.appendChild(st);
-      }
-      const tipData = { title: good.label, kind, desc,
-        price: price.textContent === 'MAX' ? '已满级' : price.textContent + ' 金币', hint };
-      this.bindTile(tile, tipData, action);
+      const foot = put('weaponFoot', '');
+      foot.append(
+        put('weaponPrice', owned ? '已拥有' : `${good.price} 金币`),
+        put('weaponAction', equipped ? '已装备' : owned ? '装备' : affordable ? '购买' : `差 ${good.price - game.coins} 金币`),
+      );
+      tile.append(art, put('weaponName', good.label, 'b'), put('weaponTag', good.tag), stats, foot);
+      // 使用 button 原生回车/空格激活，不额外绑定 keydown，避免一次按键重复购买。
+      tile.addEventListener('click', () => game.buyGun(good.id));
+      tile.addEventListener('mouseenter', () => game.audio.uiHover());
       grid.appendChild(tile);
     }
-    const list = this.el.sellPane;
-    list.textContent = '';
-    const entries = LOOT_ITEMS.filter((it) => (game.inv[it.id] || 0) > 0);
-    if (!entries.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty';
-      empty.textContent = '背包空空如也——击败掠夺者拾取鸭杂，再来出售！';
-      list.appendChild(empty);
-    }
-    for (const it of entries) {
-      const n = game.inv[it.id];
-      const tile = document.createElement('div');
-      tile.className = 'tile';
-      tile.tabIndex = 0;
-      tile.dataset.loot = it.id;
-      tile.appendChild(itemIcon(it.id));
-      const count = document.createElement('span');
-      count.className = 'count';
-      count.textContent = `×${n}`;
-      const price = document.createElement('span');
-      price.className = 'price';
-      price.textContent = it.price;
-      const all = document.createElement('button');
-      all.className = 'sellAll';
-      all.type = 'button';
-      all.textContent = '全卖';
-      all.addEventListener('click', (e) => { e.stopPropagation(); game.sellItem(it.id, true); });
-      tile.append(count, price, all);
-      const tipData = { title: it.label, kind: '鸭杂 · 背包',
-        desc: `单价 ${it.price} 金币 · 库存 ${n} · 总值 ${n * it.price} 金币`,
-        price: `${it.price} 金币 / 个`, hint: '点击卖 1 · 顶部按钮全卖' };
-      this.bindTile(tile, tipData, () => game.sellItem(it.id, false));
-      list.appendChild(tile);
-    }
-    if (refocus) {
-      const el = this.el.shop.querySelector(refocus);
-      if (el) el.focus();
-    }
+    grid.querySelector(`[data-gun="${focused || game.gunId}"]`)?.focus({ preventScroll: true });
   }
 
   banner(wave, tip) {
@@ -593,9 +482,11 @@ export class HUD {
     this.el.start.classList.toggle('hidden', name !== 'start');
     this.el.pause.classList.toggle('hidden', name !== 'pause');
     this.el.over.classList.toggle('hidden', name !== 'over');
-    this.el.shop.classList.add('hidden');
+    this.el.weapons.classList.add('hidden');
     this.el.card.classList.add('hidden');
     this.el.cardBook.classList.add('hidden');
+    for (const [id, el] of [['start', this.el.start], ['pause', this.el.pause], ['over', this.el.over]]) el.inert = name !== id;
+    this.el.weapons.inert = this.el.card.inert = this.el.cardBook.inert = true;
     // 切回战斗/标题时清掉覆盖层按钮焦点，防止空格原生激活隐藏按钮
     if (name === null || name === 'start') {
       if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();

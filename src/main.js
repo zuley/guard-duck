@@ -59,30 +59,40 @@ document.getElementById('muteBtn').addEventListener('click', () => {
   audio.uiClick();
 });
 hud.syncVolume(audio);
-document.getElementById('shopClose').addEventListener('click', () => {
-  game.closeShop();
+document.getElementById('weaponClose').addEventListener('click', () => {
+  game.closeWeapons();
 });
 document.getElementById('cardBookClose').addEventListener('click', () => {
   game.closeCardBook();
 });
-document.getElementById('tabBuy').addEventListener('click', () => {
-  audio.uiClick(); hud.shopTab('buy');
-});
-document.getElementById('tabSell').addEventListener('click', () => {
-  audio.uiClick(); hud.shopTab('sell');
-});
 
 window.addEventListener('keydown', (e) => {
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+  // 一次按下只触发一次动作；关面板/选卡后长按的空格、数字键不能变成冲刺或技能。
+  if (e.repeat && /^(Space|Enter|Escape|Key[PBTEQM]|Digit[1-4]|F3)$/.test(e.code)) {
+    e.preventDefault(); return;
+  }
+  const inMenu = ['weapons', 'cardbook', 'paused', 'card'].includes(game.state);
+  const onSlider = document.activeElement?.type === 'range';
+  if ((e.code.startsWith('Arrow') && !(inMenu && onSlider)) || (e.code === 'Space' && (!inMenu || game.state === 'card')) || (e.code === 'Tab' && game.state === 'playing')) e.preventDefault();
+  if (inMenu && e.code === 'Tab') {
+    e.preventDefault();
+    const list = game.menuFocusables();
+    const i = list.indexOf(document.activeElement);
+    const next = i < 0
+      ? (e.shiftKey ? list.length - 1 : 0)
+      : (i + (e.shiftKey ? -1 : 1) + list.length) % list.length;
+    list[next]?.focus();
+    return;
+  }
   if (e.code === 'Escape' || e.code === 'KeyP') {
     if (game.state === 'playing') game.pause();
     else if (game.state === 'paused') game.resume();
-    else if (game.state === 'shop') game.closeShop();
+    else if (game.state === 'weapons') game.closeWeapons();
     else if (game.state === 'cardbook') game.closeCardBook();
     // 选卡必须三选一，Esc 不能跳过
     return;
   }
-  // 选卡界面：1/2/3 直选，左右方向键移动焦点，回车/空格确认
+  // 选卡界面：1/2/3 直选，方向键移动焦点，回车/空格确认。
   if (game.state === 'card') {
     const draft = game.cardDraft || [];
     if (/^Digit[1-3]$/.test(e.code)) {
@@ -94,17 +104,18 @@ window.addEventListener('keydown', (e) => {
     const i = cards.indexOf(document.activeElement);
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') { cards[(i - 1 + cards.length) % cards.length]?.focus(); return; }
     if (e.code === 'ArrowRight' || e.code === 'KeyD') { cards[(i + 1) % cards.length]?.focus(); return; }
-    if (e.code === 'Enter' || e.code === 'Space') { (cards[i] || cards[0])?.click(); return; }
+    if (e.code === 'ArrowUp' || e.code === 'ArrowDown') { game.menuNavigate(0, e.code === 'ArrowDown' ? 1 : -1); return; }
+    if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); (cards[i] || cards[0])?.click(); return; }
     return;
   }
-  // 死亡结算延迟期内任意键跳过等待，直接出结算
+  // 死亡结算延迟期内任意键跳过等待，直接出结算。
   if (game.state === 'over') {
     if (game.overTimer) { clearTimeout(game.overTimer); game.overTimer = null; }
     hud.screen('over');
     return;
   }
   if (game.state === 'title') {
-    if (e.code === 'Enter') { audio.init(); audio.uiClick(); game.start(); }
+    if (e.code === 'Enter') { e.preventDefault(); audio.init(); audio.uiClick(); game.start(); }
     return;
   }
   if (e.code === 'KeyM') {
@@ -114,13 +125,17 @@ window.addEventListener('keydown', (e) => {
     hud.toast(muted ? '已静音' : '声音已开启');
     return;
   }
-  // 菜单打开时不记录移动/冲刺键，避免关店瞬间残留触发
-  if (game.state === 'shop' || game.state === 'cardbook' || game.state === 'paused') {
-    if (e.code === 'KeyB' && game.state === 'shop') game.closeShop();
+  // 菜单不记录移动/冲刺键；按钮保留原生回车/空格，方向键只负责导航。
+  if (inMenu) {
+    if (e.code === 'KeyB' && game.state === 'weapons') game.closeWeapons();
     else if (e.code === 'KeyT' && game.state === 'cardbook') game.closeCardBook();
+    else if (e.code.startsWith('Arrow') && document.activeElement?.type !== 'range') {
+      game.menuNavigate(e.code === 'ArrowRight' ? 1 : e.code === 'ArrowLeft' ? -1 : 0,
+        e.code === 'ArrowDown' ? 1 : e.code === 'ArrowUp' ? -1 : 0);
+    }
     return;
   }
-  if (e.code === 'KeyB') { game.openShop(); return; }
+  if (e.code === 'KeyB') { game.openWeapons(); return; }
   if (e.code === 'KeyT') { game.openCardBook(); return; }
   if (/^Digit[1-4]$/.test(e.code)) { game.castSkill(+e.code.slice(5)); return; }
   if (e.code === 'KeyQ') { game.cycleGun(-1); return; }

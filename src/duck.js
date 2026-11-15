@@ -217,7 +217,7 @@ export class Duck {
     this.muzzle = null;
     this.melee = this.weapon === 'fists' || this.weapon === 'club' || this.weapon === 'knife';
     const gunMetal = stdMat({ color: 0x3a3f46, roughness: 0.42, metalness: 0.8 });
-    const gunWood = stdMat({ color: 0x7a4a26, roughness: 0.7 });
+    const gunWood = stdMat({ color: opts.accent ?? 0x7a4a26, roughness: 0.65 });
     if (this.weapon === 'pistol' || this.weapon === 'rifle' || this.weapon === 'shotgun') {
       this.gun = new THREE.Group();
       if (this.weapon === 'pistol') {
@@ -255,6 +255,16 @@ export class Duck {
           mag.rotation.x = 0.18;
           this.gun.add(mag);
           this.magMesh = mag;
+          if (opts.gunId === 'qwen') mag.scale.y = 1.35;
+          if (opts.gunId === 'codex') {
+            const scope = new THREE.Mesh(geo(THREE.CylinderGeometry,0.045, 0.045, 0.22, 10), gunMetal);
+            scope.rotation.x = Math.PI / 2;
+            scope.position.set(0, 0.14, 0.02);
+            this.gun.add(scope);
+            const mount = new THREE.Mesh(geo(THREE.BoxGeometry,0.035, 0.08, 0.07), gunWood);
+            mount.position.set(0, 0.09, 0.02);
+            this.gun.add(mount);
+          }
           const sight = new THREE.Mesh(geo(THREE.BoxGeometry,0.02, 0.05, 0.02), gunMetal);
           sight.position.set(0, 0.09, 0.3);
           this.gun.add(sight);
@@ -323,45 +333,6 @@ export class Duck {
     this.group.add(blob);
     this.blob = blob;
 
-    this.gearMeshes = {};
-    if (palette === 'player') {
-      const steel = stdMat({ color: 0x6a6f76, roughness: 0.4, metalness: 0.8 });
-      const helm = new THREE.Mesh(geo(THREE.SphereGeometry,0.37, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), steel);
-      helm.position.y = 0.08;
-      helm.castShadow = true;
-      helm.visible = false;
-      this.head.add(helm);
-      const vest = new THREE.Mesh(
-        geo(THREE.SphereGeometry,0.45, 20, 14, 0, Math.PI * 2, Math.PI * 0.28, Math.PI * 0.46),
-        stdMat({ color: 0x6a7a5a, roughness: 0.6 }));
-      vest.scale.set(1, 0.92, 1.12);
-      vest.position.y = 0.42;
-      vest.castShadow = true;
-      vest.visible = false;
-      this.root.add(vest);
-      const bootMat = stdMat({ color: 0x7a4a26, roughness: 0.7 });
-      const gloveMat = stdMat({ color: 0xb03028, roughness: 0.6 });
-      const shoes = [];
-      for (const f of this.feet) {
-        const b = new THREE.Mesh(geo(THREE.BoxGeometry,0.22, 0.14, 0.26), bootMat);
-        b.position.set(0, 0.03, -0.02);
-        b.castShadow = true;
-        b.visible = false;
-        f.add(b);
-        shoes.push(b);
-      }
-      const gloves = [];
-      this.wings.forEach((w, i) => {
-        const side = i === 0 ? -1 : 1;
-        const gl = new THREE.Mesh(geo(THREE.SphereGeometry,0.1, 10, 8), gloveMat);
-        gl.position.set(side * 0.06, -0.18, 0.16);
-        gl.visible = false;
-        w.add(gl);
-        gloves.push(gl);
-      });
-      this.gearMeshes = { helmet: [helm], armor: [vest], shoes, gloves };
-    }
-
     this.walkPhase = 0;
     this.blinkT = 1 + Math.random() * 3;
     this.recoil = 0;
@@ -372,12 +343,6 @@ export class Duck {
   }
 
   kick() { this.recoil = 1; }
-
-  setGear(g = {}) {
-    for (const [key, meshes] of Object.entries(this.gearMeshes)) {
-      for (const m of meshes) m.visible = !!g[key];
-    }
-  }
 
   die() { this.deathT = 0; }
 

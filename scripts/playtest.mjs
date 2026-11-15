@@ -59,13 +59,16 @@ async function ev(expression) {
   return r.result.result.value;
 }
 
-async function key(code, vk, down = true) {
+async function key(code, vk, down = true, modifiers = 0) {
   await send('Input.dispatchKeyEvent', {
-    type: down ? 'keyDown' : 'keyUp', code, key: code === 'Space' ? ' ' : code.replace('Key', '').toLowerCase(),
+    type: down ? 'keyDown' : 'keyUp', code, modifiers,
+    key: code === 'Space' ? ' ' : code.startsWith('Key') ? code.slice(3).toLowerCase() : code.startsWith('Digit') ? code.slice(5) : code,
     windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk,
+    // Chromium 的原生 Enter 激活依赖字符事件，真实键盘会同时发送回车字符。
+    ...(down && code === 'Enter' ? { text: '\r', unmodifiedText: '\r' } : {}),
   });
 }
-async function tap(code, vk) { await key(code, vk, true); await key(code, vk, false); }
+async function tap(code, vk, modifiers = 0) { await key(code, vk, true, modifiers); await sleep(90); await key(code, vk, false, modifiers); }
 async function mouse(type, x, y, button = 'left') {
   await send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: 1 });
 }
@@ -79,6 +82,7 @@ async function waitGameTime(sec, timeoutMs = 60000) {
   while (Date.now() - start < timeoutMs) {
     const s = await ev(`(() => ({ t: window.__game.time, st: window.__game.state }))()`);
     if (s.st === 'paused') await ev('window.__game.resume()');
+    if (s.st === 'card' && await ev('window.__game.bot')) await ev('window.__game.pickCard(window.__game.cardDraft[0].id)');
     if (s.t - t0 >= sec) return true;
     await sleep(250);
   }
@@ -96,7 +100,7 @@ async function ensurePlaying() {
   const st = await ev('window.__game.state');
   if (st === 'paused') await ev('window.__game.resume()');
   if (st === 'title' || st === 'over') await ev('window.__game.start()');
-  if (st === 'shop') await ev('window.__game.closeShop()');
+  if (st === 'weapons') await ev('window.__game.closeWeapons()');
   if (st === 'cardbook') await ev('window.__game.closeCardBook()');
   if (st === 'card') await ev('window.__game.pickCard(window.__game.cardDraft[0].id)');
   await sleep(120);
@@ -115,37 +119,34 @@ try {
   }
   await sleep(1500);
 
-  // ---------- V1 商店空格购买后关店不再自动冲刺 ----------
+  // ---------- V1 原生空格购枪后关闭面板不再自动冲刺 ----------
   await ev('window.__game.start()');
   await sleep(300);
   await ev('window.__game.coins = 500');
   await tap('KeyB', 66);
   await sleep(200);
+  await ev('document.querySelector(\'#weaponGrid button[data-gun="glm"]\').focus()');
+  await tap('Space', 32);
   const v1mid = await ev(`(() => { const g = window.__game;
-    const tile = document.querySelector('#buyPane .tile');
-    tile.focus();
-    tile.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true, cancelable: true }));
-    return { coins: g.coins, spaceInKeys: g.keys.has('Space') }; })()`);
+    return { coins: g.coins, gun: g.gunId, spaceInKeys: g.keys.has('Space') }; })()`);
   await tap('KeyB', 66);
   await sleep(300);
   const v1after = await ev(`(() => ({ coins: window.__game.coins, dashCd: window.__game.p.dashCd, dashT: window.__game.p.dashT }))()`);
-  check('V1', '商店空格购买正常，关店不再残留冲刺',
-    v1mid.coins < 500 && !v1mid.spaceInKeys && v1after.dashCd === 0 && v1after.dashT === 0,
-    `购买发生 coins 500→${v1after.coins}；keys含Space=${v1mid.spaceInKeys}；关店后 dashCd=${v1after.dashCd.toFixed(2)}`);
+  check('V1', '原生空格购买 GLM，关闭面板不残留冲刺',
+    v1mid.coins === 100 && v1mid.gun === 'glm' && !v1mid.spaceInKeys && v1after.dashCd === 0 && v1after.dashT === 0,
+    `购买发生 coins 500→${v1after.coins}；keys含Space=${v1mid.spaceInKeys}；关闭后 dashCd=${v1after.dashCd.toFixed(2)}`);
 
-  // ---------- V2 商店内 Q/E 不再切枪 ----------
+  // ---------- V2 武器面板内 Q/E 不再切枪 ----------
   await ensurePlaying();
-  await ev('window.__game.coins = 2000; window.__game.buyGood("shotgun")');
-  await sleep(150);
-  await tap('KeyB', 66);
-  await sleep(150);
+  await ev('window.__game.openWeapons(); window.__game.coins = 2000; window.__game.buyGun("glm")');
   const v2before = await ev('window.__game.gunId');
   await tap('KeyE', 69);
-  await sleep(150);
+  const v2e = await ev('window.__game.gunId');
+  await tap('KeyQ', 81);
   const v2after = await ev(`(() => ({ gun: window.__game.gunId, state: window.__game.state }))()`);
-  check('V2', '商店打开时 Q/E 被屏蔽',
-    v2after.state === 'shop' && v2after.gun === v2before,
-    `商店中按 E：${v2before} → ${v2after.gun}（应不变）`);
+  check('V2', '武器面板打开时 Q/E 均被屏蔽',
+    v2after.state === 'weapons' && v2e === v2before && v2after.gun === v2before,
+    `面板中按 E/Q：${v2before} → ${v2e} → ${v2after.gun}（应不变）`);
   await tap('KeyB', 66);
   await sleep(150);
 
@@ -280,26 +281,39 @@ try {
       `隔拐角挥击后 hp ${v8.hpBefore}→${v8after.hp}（应不变；视线判定生效）`);
   } else check('V8', '近战掩体', false, '未找到矩形碰撞体');
 
-  // ---------- V9 换弹音效按实际时长缩放（代码路径） ----------
+  // ---------- V9 换弹音效按卡牌强化后的实际时长缩放 ----------
   await ensurePlaying();
-  const v9 = await ev(`(() => { const g = window.__game;
-    g.gear.gloves = 3; g.recomputeLoadout();
-    let arg = null; const orig = g.audio.reload.bind(g.audio);
-    g.audio.reload = (t) => { arg = t; return orig(t); };
-    g.p.mag = 1; g.startReload();
+  const v9 = await ev(`(() => { const g = window.__game; const cards = { ...g.cards };
+    g.cards.c_reload = 3; g.recomputeLoadout();
+    let arg = null; const orig = g.audio.reload;
+    g.audio.reload = (t) => { arg = t; return orig.call(g.audio, t); };
+    g.p.mag = 1; g.p.reserve = 96; g.p.reloadT = 0; g.startReload();
     g.audio.reload = orig;
-    const rt = g.loadout.reloadTime;
-    g.gear.gloves = 0; g.recomputeLoadout(); g.p.reloadT = 0;
-    return { arg, rt }; })()`);
-  check('V9', '换弹音效接收实际换弹时长（手套缩短后 <1.6s 基准）',
-    Math.abs(v9.arg - v9.rt) < 0.01 && v9.rt < 1.6,
-    `audio.reload(${v9.arg})，reloadTime=${v9.rt.toFixed(2)}s（音效节点按 k=时长/1.6 等比排程）`);
+    const rt = g.loadout.reloadTime, base = g.loadout.gun.reloadTime;
+    g.cards = cards; g.recomputeLoadout(); g.p.reloadT = 0;
+    return { arg, rt, base }; })()`);
+  check('V9', '换弹音效接收卡牌缩短后的真实换弹时长',
+    Math.abs(v9.arg - v9.rt) < 0.01 && v9.rt < v9.base,
+    `audio.reload(${v9.arg})，reloadTime=${v9.rt.toFixed(2)}s，未强化基准=${v9.base}s`);
 
-  // ---------- V10 备弹共享明示 ----------
-  const v10 = await ev(`(async () => { const r = await import('/src/rules.js');
-    return r.shopCatalog().find(x => x.id === 'ammo').desc; })()`);
-  check('V10', '子弹箱描述明示「全枪通用」',
-    v10.includes('全枪通用'), `desc="${v10}"`);
+  // ---------- V10 福利即时效果遵守卡牌倍率，备弹仍全枪共享 ----------
+  const v10 = await ev(`(() => { const g = window.__game; const cards = { ...g.cards };
+    g.cards = { c_ammo: 2, c_xp: 2 }; g.recomputeLoadout();
+    g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
+    const reserve = g.p.reserve, xp = g.xpEarned, coins = g.coins;
+    g.spawnPickup(g.p.pos.clone(), 'loot', 'overtime');
+    g.spawnPickup(g.p.pos.clone(), 'loot', 'performance');
+    g.updatePickups(0.016);
+    const benefitAmmo = g.p.reserve - reserve, benefitXp = g.xpEarned - xp, benefitCoins = g.coins - coins;
+    g.spawnPickup(g.p.pos.clone(), 'ammo'); g.updatePickups(0.016);
+    const boxAmmo = g.p.reserve - reserve - benefitAmmo, shared = g.p.reserve;
+    g.equipGun('claude'); g.equipGun('glm');
+    const stillShared = g.p.reserve === shared;
+    g.cards = cards; g.recomputeLoadout();
+    return { benefitAmmo, benefitXp, benefitCoins, boxAmmo, stillShared, noInventory: !('inv' in g) }; })()`);
+  check('V10', '福利即得金币/经验/备弹；经验乘倍率，福利备弹不乘弹药箱倍率，切枪共享',
+    v10.benefitAmmo === 16 && v10.benefitXp === 45 && v10.benefitCoins === 42
+    && v10.boxAmmo === 96 && v10.stillShared && v10.noInventory, JSON.stringify(v10));
 
   // ---------- V11 死亡结算延迟可跳过 ----------
   await ensurePlaying();
@@ -341,53 +355,78 @@ try {
   await ev('window.__game.bot = false; window.__game.start()');
   await sleep(200);
 
-  // ---------- V13 手柄菜单导航 + A 购买 ----------
+  // ---------- V13 手柄 B 打开、方向导航、A 购买、B 关闭 ----------
   await ensurePlaying();
-  await ev(`(() => { const g = window.__game; g.coins = 500;
+  const v13open = await ev(`(() => { const g = window.__game; g.coins = 500; g.padPrev = [];
     window.__fakePad = { buttons: Array.from({length: 17}, () => ({ pressed: false })), axes: [0, 0, 0, 0], connected: true };
     navigator.getGamepads = () => [window.__fakePad];
-    g.openShop(); })()`);
+    window.__fakePad.buttons[1].pressed = true; g.pollGamepad();
+    window.__fakePad.buttons[1].pressed = false; g.pollGamepad();
+    return g.state; })()`);
   await sleep(200);
   const v13a = await ev(`(() => { const g = window.__game;
     document.activeElement && document.activeElement.blur();
-    window.__fakePad.axes[1] = 0.9; g.pollGamepad(); // 第一次：聚焦首个可交互元素
+    g.padNavT = 0; window.__fakePad.axes[1] = 0.9; g.pollGamepad();
     const first = document.activeElement;
     window.__fakePad.axes[1] = 0; g.pollGamepad();
-    g.padNavT = 0;
-    window.__fakePad.axes[1] = 0.9; g.pollGamepad(); // 第二次：向下移动焦点
-    window.__fakePad.axes[1] = 0;
+    g.padNavT = 0; window.__fakePad.axes[1] = 0.9; g.pollGamepad();
+    window.__fakePad.axes[1] = 0; g.pollGamepad();
     const second = document.activeElement;
-    return { first: first ? (first.id || first.dataset.good || first.tagName) : null,
-      focused: second ? (second.dataset.good || second.tagName) : null,
-      moved: first !== second }; })()`);
+    return { first: first ? (first.id || first.dataset.gun || first.tagName) : null,
+      focused: second ? (second.id || second.dataset.gun || second.tagName) : null,
+      inPanel: !!second?.closest('#weaponScreen'), moved: first !== second }; })()`);
   const v13b = await ev(`(() => { const g = window.__game;
+    document.querySelector('#weaponGrid button[data-gun="glm"]').focus();
     window.__fakePad.buttons[0].pressed = true; g.pollGamepad();
     window.__fakePad.buttons[0].pressed = false; g.pollGamepad();
-    return { coins: g.coins, state: g.state }; })()`);
+    return { coins: g.coins, state: g.state, gun: g.gunId }; })()`);
   await ev(`(() => { const g = window.__game;
     window.__fakePad.buttons[1].pressed = true; g.pollGamepad();
     window.__fakePad.buttons[1].pressed = false; g.pollGamepad();
     navigator.getGamepads = window.__realGetGamepads; })()`);
   const v13c = await ev('window.__game.state');
-  check('V13', '手柄商店内方向导航 + A 购买 + B 关闭',
-    v13a.focused !== null && v13a.moved && v13b.coins < 500 && v13c === 'playing',
-    `首个焦点=${v13a.first} → 下移后=${v13a.focused}（moved=${v13a.moved}）；A 确认后 coins 500→${v13b.coins}；B 关闭后 state=${v13c}`);
+  check('V13', '手柄 B 打开武器面板、方向导航、A 购买 GLM、B 关闭',
+    v13open === 'weapons' && v13a.inPanel && v13a.moved && v13b.coins === 100
+    && v13b.gun === 'glm' && v13b.state === 'weapons' && v13c === 'playing',
+    JSON.stringify({ open: v13open, nav: v13a, purchase: v13b, closed: v13c }));
 
-  // ---------- V14 空格单击单买（防双触发） ----------
+  await tap('KeyB', 66); await sleep(150);
+  await ev('document.querySelector(\'#weaponGrid button[data-gun="claude"]\').focus()');
+  await tap('ArrowRight', 39);
+  const v13keys = await ev(`(() => ({ gun: document.activeElement?.dataset.gun,
+    inPanel: !!document.activeElement?.closest('#weaponScreen'), keys: window.__game.keys.size }))()`);
+  await tap('Escape', 27);
+  check('V13b', '武器面板方向键移动焦点但不记录为移动，Esc 关闭',
+    v13keys.inPanel && v13keys.gun !== 'claude' && v13keys.keys === 0 && await ev('window.__game.state') === 'playing',
+    JSON.stringify(v13keys));
+
+  // ---------- V14 真实原生 Space/Enter 各只调用一次购买 ----------
   await ensurePlaying();
-  await ev('window.__game.coins = 500');
+  await ev(`(() => { const g = window.__game; g.start(); g.coins = 2000;
+    window.__weaponActivation = { original: g.buyGun, calls: [] };
+    g.buyGun = function (id) { window.__weaponActivation.calls.push(id); return window.__weaponActivation.original.call(this, id); };
+    window.__activationKeyEvents = [];
+    window.__observeActivation = (e) => { if (['Space', 'Enter'].includes(e.code) && e.target.closest('#weaponGrid'))
+      window.__activationKeyEvents.push({ code: e.code, prevented: e.defaultPrevented }); };
+    window.addEventListener('keydown', window.__observeActivation);
+    g.openWeapons(); return 1; })()`);
+  const v14 = [];
+  for (const [code, vk, id, price] of [['Space', 32, 'qwen', 320], ['Enter', 13, 'codex', 620]]) {
+    const before = await ev(`(() => { document.querySelector('#weaponGrid button[data-gun="${id}"]').focus();
+      return { coins: window.__game.coins, calls: window.__weaponActivation.calls.length }; })()`);
+    await tap(code, vk); await sleep(150);
+    const after = await ev(`(() => ({ coins: window.__game.coins, gun: window.__game.gunId,
+      calls: window.__weaponActivation.calls.length, keys: window.__game.keys.size,
+      event: window.__activationKeyEvents[window.__activationKeyEvents.length - 1] }))()`);
+    v14.push({ code, id, price, before, after });
+  }
+  await ev(`(() => { const g = window.__game; g.buyGun = window.__weaponActivation.original;
+    window.removeEventListener('keydown', window.__observeActivation); return 1; })()`);
   await tap('KeyB', 66);
-  await sleep(200);
-  const v14 = await ev(`(() => { const g = window.__game;
-    const tile = document.querySelector('#buyPane .tile[data-good="ammo"]');
-    tile.focus();
-    const e1 = new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true, cancelable: true });
-    tile.dispatchEvent(e1);
-    return { coins: g.coins, prevented: e1.defaultPrevented }; })()`);
-  await tap('KeyB', 66);
-  check('V14', '商店空格购买单次触发且阻止原生激活',
-    v14.coins === 440 && v14.prevented,
-    `coins 500→${v14.coins}（应只买一次 60），defaultPrevented=${v14.prevented}（原生 click 激活被阻止）`);
+  check('V14', '原生 Space/Enter 各激活一次，不靠阻止默认行为或重复 click',
+    v14.every(r => r.after.coins === r.before.coins - r.price && r.after.gun === r.id
+      && r.after.calls === r.before.calls + 1 && r.after.keys === 0
+      && r.after.event?.code === r.code && r.after.event.prevented === false), JSON.stringify(v14));
 
   // ---------- V15 GPU 资源不再单调增长 ----------
   await ev('window.__game.bot = false');
@@ -395,8 +434,9 @@ try {
     return g.engine.renderer.info.memory.geometries; })()`);
   for (let i = 0; i < 8; i++) {
     await ev(`(() => { const g = window.__game;
-      g.coins = 5000;
-      for (const id of ['repeater', 'shotgun', 'longrifle']) if (!g.ownedGuns.includes(id)) g.buyGood(id);
+      g.coins = 5000; g.openWeapons();
+      for (const id of ['qwen', 'glm', 'codex']) if (!g.ownedGuns.includes(id)) g.buyGun(id);
+      g.closeWeapons();
       for (let k = 0; k < 5; k++) g.cycleGun(1);
       for (let k = 0; k < 6; k++) g.spawnEnemy('brawler');
       g.start(); })()`);
@@ -458,6 +498,72 @@ try {
     v19.sliderVisible && Math.abs(v19.v1 - 0.3) < 0.01 && v19.muted && v19.gain2 === 0 && v19.unmuted && v19.stored === '0.3',
     `滑条30→volume=${v19.v1} gain=${v19.gain1}；静音 gain=${v19.gain2}；取消静音=${v19.unmuted}；localStorage=${v19.stored}`);
   await ev('window.__game.resume()');
+
+  // ---------- V19b 首次 Tab / Shift+Tab 与首尾循环 ----------
+  await ev(`(() => { const g = window.__game; g.bot = false; g.start();
+    g.interT = 99999; g.p.iframes = 999; })()`);
+  await tap('Escape', 27);
+  const v19b = { beforeReverse: await ev('document.activeElement === document.body') };
+  await tap('Tab', 9, 8); // CDP modifiers: Shift = 8
+  v19b.reverse = await ev('document.activeElement.id');
+  await tap('Tab', 9);
+  v19b.wrapForward = await ev('document.activeElement.id');
+  await tap('Tab', 9);
+  v19b.next = await ev('document.activeElement.id');
+  await tap('Escape', 27);
+  await tap('Escape', 27);
+  v19b.beforeForward = await ev('document.activeElement === document.body');
+  await tap('Tab', 9);
+  v19b.forward = await ev('document.activeElement.id');
+  await tap('Tab', 9, 8);
+  v19b.wrapBackward = await ev('document.activeElement.id');
+  check('V19b', '暂停菜单首次 Tab/Shift+Tab 正确聚焦，正反方向均在菜单内循环',
+    v19b.beforeReverse && v19b.beforeForward && v19b.reverse === 'muteBtn'
+      && v19b.wrapForward === 'resumeBtn' && v19b.next === 'quitBtn'
+      && v19b.forward === 'resumeBtn' && v19b.wrapBackward === 'muteBtn', JSON.stringify(v19b));
+  await tap('Escape', 27);
+
+  // ---------- V20 福利实景外观与反复掉落的 GPU 资源 ----------
+  await ev(`(async () => { const g = window.__game; const { LOOT_ITEMS } = await import('/src/rules.js');
+    g.bot = false; g.start(); g.p.pos.set(0, 0, 3); g.p.vel.set(0, 0, 0); g.p.iframes = 999;
+    window.__benefitShowcase = () => { g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 99999;
+      LOOT_ITEMS.forEach((it, i) => g.spawnPickup(g.p.pos.clone().set(-2.2 + (i % 3) * 2.2, 0, -3 + Math.floor(i / 3) * 2.2), 'loot', it.id));
+      g.spawnPickup(g.p.pos.clone().set(-5, 0, 1), 'ammo');
+      g.spawnPickup(g.p.pos.clone().set(5, 0, 1), 'health'); };
+    window.__benefitShowcase(); return 1; })()`);
+  await waitGameTime(0.3);
+  await shot('v20-benefit-drops');
+  const v20before = await ev(`(() => ({ ...window.__game.engine.renderer.info.memory }))()`);
+  for (let i = 0; i < 6; i++) { await ev('window.__benefitShowcase()'); await waitGameTime(0.1); }
+  const v20 = await ev(`(() => { const g = window.__game; return { count: g.pickups.length,
+    ids: g.pickups.filter(p => p.kind === 'loot').map(p => p.item), memory: { ...g.engine.renderer.info.memory } }; })()`);
+  check('V20', '九类福利各有带名称的外观，反复掉落六轮 GPU 资源不增长',
+    v20.count === 11 && new Set(v20.ids).size === 9 && v20.memory.geometries <= v20before.geometries
+      && v20.memory.textures <= v20before.textures,
+    JSON.stringify({ before: v20before, after: v20 }));
+
+  const v20b = await ev(`window.__game.pickups.map(pk => {
+    const meshes = []; pk.mesh.traverse(node => { if (node.isMesh) meshes.push(node); });
+    return { kind: pk.item || pk.kind, bodies: meshes.filter(node => node.castShadow).length,
+      mainCastsShadow: meshes[0]?.castShadow }; })`);
+  check('V20b', '全部 11 种掉落仅主体投影，装饰不增加阴影绘制',
+    v20b.length === 11 && v20b.every(pk => pk.bodies === 1 && pk.mainCastsShadow), JSON.stringify(v20b));
+
+  // ---------- V21 窄屏四把武器完整可见，无横向溢出 ----------
+  await send('Emulation.setDeviceMetricsOverride', { width: 400, height: 780, deviceScaleFactor: 1, mobile: false });
+  await ev('window.__game.coins = 1600; window.__game.openWeapons()');
+  await sleep(600);
+  const v21 = await ev(`(() => { const panel = document.querySelector('.weaponWrap').getBoundingClientRect();
+    const rects = [...document.querySelectorAll('#weaponGrid .weaponCard')].map(el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth, panel: { x: panel.x, right: panel.right }, rects,
+      allVisible: rects.every(r => r.x >= 16 && r.x + r.w <= innerWidth - 16 && r.y >= 0 && r.y + r.h <= innerHeight),
+      closeVisible: document.getElementById('weaponClose').getBoundingClientRect().bottom < innerHeight }; })()`);
+  check('V21', '400px 窄屏武器面板无横向溢出，四把枪及关闭按钮完整可见',
+    v21.rects.length === 4 && v21.allVisible && v21.closeVisible && v21.scrollWidth <= v21.width
+      && v21.panel.x >= 16 && v21.panel.right <= v21.width - 16, JSON.stringify(v21));
+  await shot('v21-weapons-phone');
+  await ev('window.__game.closeWeapons()');
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
 
   // ---------- 汇总 ----------
   console.log('\n===== 汇总 =====');

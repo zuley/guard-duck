@@ -59,8 +59,9 @@ async function ev(expression) {
 async function key(code, vk, down = true) {
   await send('Input.dispatchKeyEvent', {
     type: down ? 'keyDown' : 'keyUp', code,
-    key: code === 'Space' ? ' ' : code.startsWith('Digit') ? code.slice(5) : code.replace('Key', '').toLowerCase(),
+    key: code === 'Space' ? ' ' : code.startsWith('Key') ? code.slice(3).toLowerCase() : code.startsWith('Digit') ? code.slice(5) : code,
     windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk,
+    ...(down && code === 'Enter' ? { text: '\r', unmodifiedText: '\r' } : {}),
   });
 }
 const tap = async (code, vk) => { await key(code, vk, true); await sleep(90); await key(code, vk, false); };
@@ -191,24 +192,26 @@ try {
 
   // ---------- C5 鼠标点击选卡：立即生效并回到战斗 ----------
   const before = await ev(`(() => { const g = window.__game; const c = g.cardDraft[0];
-    return { id: c.id, kinds: Object.keys(g.cards).length, hist: g.cardHistory.length }; })()`);
+    return { id: c.id, stacks: g.cards[c.id] || 0, kinds: Object.keys(g.cards).length, hist: g.cardHistory.length }; })()`);
   await clickSel('#cardRow .pickCard');
   const c5 = await ev(`(() => { const g = window.__game;
     return { state: g.state, hidden: document.getElementById('cardScreen').classList.contains('hidden'),
       draft: g.cardDraft, kinds: Object.keys(g.cards).length, hist: g.cardHistory.length,
       stacks: g.cards['${before.id}'] || 0, chip: document.getElementById('cardChip').textContent }; })()`);
   check('C5', '点击卡片后叠层 +1、关闭面板、回到战斗',
-    c5.state === 'playing' && c5.hidden && c5.draft === null && c5.stacks === 1
-    && c5.hist === before.hist + 1 && c5.kinds === before.kinds + 1 && +c5.chip === c5.hist,
+    c5.state === 'playing' && c5.hidden && c5.draft === null && c5.stacks === before.stacks + 1
+    && c5.hist === before.hist + 1 && c5.kinds === before.kinds + (before.stacks === 0 ? 1 : 0) && +c5.chip === c5.hist,
     JSON.stringify({ before, c5 }));
 
   // ---------- C6 键盘 1/2/3 直选 ----------
   await clearWave();
-  const k6 = await ev('window.__game.cardDraft.map(c => c.id)');
+  const k6 = await ev(`(() => { const g = window.__game, id = g.cardDraft[1].id;
+    return { id, stacks: g.cards[id] || 0, hist: g.cardHistory.length }; })()`);
   await tap('Digit2', 50);
   await sleep(220);
-  const c6 = await ev(`(() => { const g = window.__game; return { state: g.state, got: g.cards['${k6[1]}'] || 0 }; })()`);
-  check('C6', '数字键 2 选中第二张卡', c6.state === 'playing' && c6.got === 1, JSON.stringify({ pick: k6[1], ...c6 }));
+  const c6 = await ev(`(() => { const g = window.__game; return { state: g.state, got: g.cards['${k6.id}'] || 0, hist: g.cardHistory.length }; })()`);
+  check('C6', '数字键 2 选中第二张卡并增加一层', c6.state === 'playing' && c6.got === k6.stacks + 1
+    && c6.hist === k6.hist + 1, JSON.stringify({ before: k6, after: c6 }));
 
   // ---------- C7 方向键 + 回车选择 ----------
   await clearWave();
@@ -216,12 +219,14 @@ try {
   await tap('ArrowRight', 39);
   await sleep(140);
   const focusIdx = await ev(`[...document.querySelectorAll('#cardRow .pickCard')].indexOf(document.activeElement)`);
-  const k7 = await ev('window.__game.cardDraft.map(c => c.id)');
+  const k7 = await ev(`(() => { const g = window.__game, id = g.cardDraft[1].id;
+    return { id, stacks: g.cards[id] || 0, hist: g.cardHistory.length }; })()`);
   await tap('Enter', 13);
   await sleep(220);
-  const c7 = await ev(`(() => { const g = window.__game; return { state: g.state, got: g.cards['${k7[1]}'] || 0 }; })()`);
-  check('C7', '方向键移动焦点 + 回车确认', focusIdx === 1 && c7.state === 'playing' && c7.got >= 1,
-    JSON.stringify({ focusIdx, pick: k7[1], ...c7 }));
+  const c7 = await ev(`(() => { const g = window.__game; return { state: g.state, got: g.cards['${k7.id}'] || 0, hist: g.cardHistory.length }; })()`);
+  check('C7', '方向键移动焦点 + 回车只增加选中卡一层', focusIdx === 1 && c7.state === 'playing'
+    && c7.got === k7.stacks + 1 && c7.hist === k7.hist + 1,
+    JSON.stringify({ focusIdx, before: k7, after: c7 }));
 
   // ---------- C8 选卡界面不能被 Esc/B 跳过 ----------
   await clearWave();
@@ -235,7 +240,7 @@ try {
 
   // ---------- C9 属性卡真实改写战斗数值 ----------
   const c9 = await ev(`(() => { const g = window.__game;
-    __T.hold(); g.cards = {}; g.recomputeLoadout();
+    __T.hold(); g.cards = {}; g.cardHistory = []; g.recomputeLoadout();
     const base = { dmg: g.loadout.damage, hp: g.loadout.maxHp, rpm: g.loadout.rpm, mag: g.loadout.magSize, spd: g.loadout.speedMul };
     const step = {};
     for (const [k, id] of [['dmg','c_dmg'],['hp','c_hp'],['rpm','c_rate'],['mag','c_mag'],['spd','c_speed']]) {
@@ -264,6 +269,7 @@ try {
 
   // ---------- C11 三档稀有度视觉差异 ----------
   await ev(`(async () => { const g = window.__game; const { CARD_BY_ID } = await import('/src/rules.js');
+    g.cards = {}; g.cardHistory = []; g.recomputeLoadout();
     g.cardDraft = ['g_chain', 'r_frost', 'c_dmg'].map(id => ({ ...CARD_BY_ID[id], stacks: 0, next: 1 }));
     g.state = 'card'; g.hud.cardOpen(true); g.hud.renderCards(g); return 1; })()`);
   await sleep(1000);

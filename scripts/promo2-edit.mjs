@@ -66,10 +66,10 @@ frames('skill2', mk.cast2 - 0.15, mk.cast2 + 2.6, { flash: 1, trans: 0.25 });
 frames('skill3', mk.cast3 - 0.15, mk.cast3 + 2.8, { flash: 1, trans: 0.25 });
 frames('skill4', mk.cast4 - 0.15, mk.cast4 + 2.6, { flash: 1, trans: 0.3 });
 card('card3', 'c3');
-frames('talents', mk.talents + 0.2, mk.talents + 11.7, { speed: 2 });
+frames('talents', mk.talents + 0.2, mk.skills - 0.3, { speed: 2 });
 card('card4', 'c4');
-frames('shopff', mk.shop + 0.8, mk.shopGear - 0.3, { speed: 2, trans: 0 });
-frames('gear', mk.shopGear + 0.2, mk.shopGear + 3.9, { trans: 0.4 });
+frames('weapons', mk.shop + 0.8, mk.benefits - 0.3, { speed: 2, trans: 0 });
+frames('benefits', mk.benefits + 0.2, mk.over - 0.3, { speed: 2, trans: 0.4 });
 frames('over', mk.over + 0.8, mk.over + 4.8, { trans: 0.4 });
 card('end', 'c5', { trans: 0 });
 

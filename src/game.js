@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
 import { FX } from './fx.js';
-import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GEAR, GUNS, gearNext, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
+import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, GUNS, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
 import { ARENA, GATES, GATE_LANE_HALF, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
-import { glowSprite, textTexture } from './textures.js';
+import { textTexture } from './textures.js';
+import { makePickupVisual } from './pickups.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
 
@@ -63,7 +64,7 @@ export class Game {
     this.mouseFire = false;
     this.best = this.loadBest();
 
-    this.playerDuck = new Duck('player', 1);
+    this.playerDuck = new Duck('player', 1, 'rifle', { gunId: 'claude', accent: GUNS.claude.accent });
     engine.scene.add(this.playerDuck.group);
     this.playerDuck.group.position.set(0, 0, 3);
     this.playerHpBar = this.makeHpBar(0x7ee06a, '鸭鸭', '#ffe9a8');
@@ -110,7 +111,7 @@ export class Game {
       hp: 100, maxHp: 100, mag: WEAPON.magSize, reserve: WEAPON.reserveStart,
       heat: 0, fireT: 0, reloadT: 0, dashT: 0, dashCd: 0, iframes: 0,
       lastHurt: -99, aimYaw: 0, moving: false, dashDir: new THREE.Vector3(0, 0, -1),
-      shield: 0, shieldMax: 0, shieldSkillT: 0, rageT: 0,
+      shield: 0, shieldMax: 0, skillShield: 0, shieldSkillT: 0, rageT: 0, hasteT: 0,
     };
     this.wave = 0;
     this.waveState = 'inter';
@@ -119,11 +120,9 @@ export class Game {
     this.spawnT = 0;
     this.kills = 0; this.shots = 0; this.hits = 0; this.score = 0; this.time = 0;
     this.coins = 0; this.coinsEarned = 0;
-    this.inv = {};
-    this.gear = {};
-    this.ownedGuns = ['carbine'];
-    this.gunId = 'carbine';
-    this.mags = { carbine: WEAPON.magSize };
+    this.ownedGuns = ['claude'];
+    this.gunId = 'claude';
+    this.mags = { claude: WEAPON.magSize };
     this.level = 1; this.xp = 0; this.xpEarned = 0;
     this.cards = {};        // 卡牌 id → 已叠层数
     this.cardDraft = null;  // 当前三选一候选
@@ -141,7 +140,7 @@ export class Game {
 
   recomputeLoadout() {
     const oldMax = this.loadout ? this.loadout.maxHp : this.p.maxHp;
-    this.loadout = applyCards(computeLoadout(this.gunId, this.gear), cardEffects(this.cards, this.level));
+    this.loadout = applyCards(computeLoadout(this.gunId), cardEffects(this.cards, this.level));
     const delta = this.loadout.maxHp - oldMax;
     this.p.maxHp = this.loadout.maxHp;
     this.p.hp = Math.min(this.p.maxHp, this.p.hp + Math.max(0, delta));
@@ -217,73 +216,60 @@ export class Game {
     this.hud.screen(null);
   }
 
-  /* ---------------- 商店 ---------------- */
+  /* ---------------- 极简武器面板 ---------------- */
 
-  openShop() {
+  openWeapons() {
     if (this.state !== 'playing') return;
-    this.state = 'shop';
+    this.state = 'weapons';
     this.mouse.down = false;
     this.mouseFire = false;
+    this.padFire = false;
     this.keys.clear();
-    this.hud.shopOpen(true);
-    this.hud.renderShop(this);
+    this.hud.weaponsOpen(true);
+    this.hud.renderWeapons(this);
     this.audio.uiClick();
   }
 
-  closeShop() {
-    if (this.state !== 'shop') return;
+  closeWeapons() {
+    if (this.state !== 'weapons') return;
     this.state = 'playing';
-    this.keys.clear(); // 商店里按过的空格/方向键不得残留成冲刺/移动
-    this.hud.shopOpen(false);
+    this.keys.clear();
+    this.mouse.down = false;
+    this.mouseFire = false;
+    this.padFire = false;
+    this.hud.weaponsOpen(false);
     this.audio.uiClick();
   }
 
-  buyGood(id) {
-    const p = this.p;
-    if (id === 'ammo') {
-      if (this.coins < 60) { this.hud.toast('金币不足！'); return; }
-      this.coins -= 60;
-      p.reserve += 48;
-      this.hud.toast('购入子弹箱 · 备弹 +48');
-      this.audio.pickup();
-    } else if (GEAR[id]) {
-      const cur = this.gear[id] || 0;
-      const next = gearNext(id, cur);
-      if (!next) return;
-      if (this.coins < next.price) { this.hud.toast('金币不足！'); return; }
-      this.coins -= next.price;
-      this.gear[id] = next.level;
-      this.recomputeLoadout();
-      this.playerDuck.setGear(this.gear);
-      this.hud.toast(`${cur ? '升级' : '装备'} ${GEAR[id].label} ${['Ⅰ', 'Ⅱ', 'Ⅲ'][next.level - 1]} · ${next.desc}`);
-      this.audio.pickup();
-    } else if (GUNS[id]) {
-      if (!this.ownedGuns.includes(id)) {
-        const g = GUNS[id];
-        if (this.coins < g.price) { this.hud.toast('金币不足！'); return; }
-        this.coins -= g.price;
-        this.ownedGuns.push(id);
-        this.mags[id] = g.magSize;
-        this.hud.toast(`购入 ${g.label}！`);
-      }
-      this.equipGun(id);
-    }
-    this.hud.renderShop(this);
+  // 只接受面板内的四把模型枪；已拥有的切换不扣钱，也不会凭空补满弹匣。
+  buyGun(id) {
+    if (this.state !== 'weapons') return;
+    const g = Object.hasOwn(GUNS, id) ? GUNS[id] : null;
+    if (!g || this.gunId === id) return;
+    if (!this.ownedGuns.includes(id)) {
+      if (this.coins < g.price) { this.hud.toast('金币不足！'); return; }
+      this.coins -= g.price;
+      this.ownedGuns.push(id);
+      this.hud.toast(`购入 ${g.label}！`);
+    } else this.hud.toast(`装备 ${g.label}`);
+    this.equipGun(id);
+    this.hud.renderWeapons(this);
   }
 
   equipGun(id) {
-    if (!this.ownedGuns.includes(id)) return;
+    if (!this.ownedGuns.includes(id) || this.gunId === id) return;
     this.mags[this.gunId] = this.p.mag;
     this.gunId = id;
     this.recomputeLoadout();
-    this.p.mag = this.mags[id] ?? this.loadout.magSize;
+    this.p.mag = Math.min(this.mags[id] ?? this.loadout.magSize, this.loadout.magSize);
+    this.mags[id] = this.p.mag;
     this.p.reloadT = 0;
     this.rebuildPlayerDuck();
     this.audio.reload();
   }
 
   cycleGun(dir) {
-    if (this.state !== 'playing') return; // 商店/天赋/暂停时不得切枪
+    if (this.state !== 'playing') return; // 面板 / 选卡 / 暂停时不得切枪
     const order = Object.keys(GUNS).filter((id) => this.ownedGuns.includes(id));
     if (order.length < 2) return;
     const i = order.indexOf(this.gunId);
@@ -291,17 +277,43 @@ export class Game {
     this.hud.toast(`切换 ${this.loadout.gun.label}`);
   }
 
-  sellItem(id, all) {
-    const it = LOOT_BY_ID[id];
-    const have = this.inv[id] || 0;
-    if (!it || have <= 0) return;
-    const n = all ? have : 1;
-    this.inv[id] = have - n;
-    const gain = it.price * n;
-    this.coins += gain; this.coinsEarned += gain;
-    this.hud.toast(`售出 ${it.label} ×${n} · +${gain} 金币`);
-    this.audio.pickup();
-    this.hud.renderShop(this);
+  // 不限时护盾与限时蹲防盾分开记账，总数仍用 p.shield 供 HUD 显示。
+  // cap 只限制本次来源的补充，不得把更大的现有护盾截小。
+  addShield(amount, cap = Infinity) {
+    const p = this.p;
+    const permanent = Math.max(0, p.shield - (p.skillShield || 0));
+    const added = Math.max(0, Math.min(amount, cap - permanent));
+    p.shield += added;
+    p.shieldMax = Math.max(p.shieldMax, p.shield);
+    return added;
+  }
+
+  // 打工人福利拾取即生效，反馈显示实际收益（满血/护盾上限不虚报）。
+  applyLootEffect(eff) {
+    const p = this.p;
+    if (!eff) return '';
+    switch (eff.kind) {
+      case 'heal': {
+        const before = p.hp;
+        p.hp = Math.min(p.maxHp, p.hp + eff.amount);
+        const healed = Math.round(p.hp - before);
+        return healed ? `回血 ${healed}` : '生命已满';
+      }
+      case 'fullheal': p.hp = p.maxHp; return '生命全满';
+      case 'shield': {
+        const added = this.addShield(eff.amount, eff.cap);
+        return added ? `护盾 +${Math.round(added)}` : '护盾充足';
+      }
+      case 'ammo': p.reserve += eff.amount; return `备弹 +${eff.amount}`;
+      case 'xp': {
+        const amount = Math.round(eff.amount * this.loadout.xpMul);
+        this.addXp(amount);
+        return `经验 +${amount}`;
+      }
+      case 'rage': p.rageT = Math.max(p.rageT, eff.duration); return `红温 ${eff.duration}s`;
+      case 'haste': p.hasteT = Math.max(p.hasteT, eff.duration); return `移速 +25% ${eff.duration}s`;
+      default: return '';
+    }
   }
 
   /* ---------------- 等级 / 天赋 / 技能 ---------------- */
@@ -472,8 +484,9 @@ export class Game {
       }
       this.hud.toast('嘎嘎乱杀！寸草不生');
     } else if (sk.id === 'shield') {
-      p.shield = Math.max(p.shield, lo.shield.pool);
-      p.shieldMax = Math.max(p.shieldMax, lo.shield.pool);
+      p.shield = Math.max(0, p.shield - p.skillShield) + lo.shield.pool;
+      p.skillShield = lo.shield.pool;
+      p.shieldMax = Math.max(p.shieldMax, p.shield);
       p.shieldSkillT = lo.shield.duration;
       this.fx.ring(p.pos.clone().setY(0.6), 0x7ee06a, 2);
       this.hud.toast(`抱头蹲防！吸收 ${lo.shield.pool} 伤害`);
@@ -491,10 +504,9 @@ export class Game {
 
   rebuildPlayerDuck() {
     const old = this.playerDuck;
-    const duck = new Duck('player', 1, this.loadout.gun.model);
+    const duck = new Duck('player', 1, this.loadout.gun.model, { gunId: this.gunId, accent: this.loadout.gun.accent });
     duck.group.position.copy(old.group.position);
     duck.yaw = old.yaw;
-    duck.setGear(this.gear);
     this.engine.scene.remove(old.group);
     this.engine.scene.add(duck.group);
     old.dispose();
@@ -520,7 +532,7 @@ export class Game {
       this.hud.crosshair(0, 0, 0, false);
       return;
     }
-    if (this.state === 'paused' || this.state === 'shop' || this.state === 'card' || this.state === 'cardbook') {
+    if (this.state === 'paused' || this.state === 'weapons' || this.state === 'card' || this.state === 'cardbook') {
       // 选卡/图鉴时战斗完全冻结，但护卫羽毛仍绕着鸭鸭转，画面不死板
       if (this.orbitals.length) {
         this.orbitT += dt * 1.2;
@@ -538,10 +550,11 @@ export class Game {
       this.time += dt;
       this.updatePlayer(dt);
       this.updateWaves(dt);
-      this.updateEnemies(dt);
-      this.updateBullets(dt);
-      this.updatePickups(dt);
-      this.updateOrbit(dt);
+      // 选卡立即冻结；阵亡当帧也不能再靠工资/福利回血或继续收金币。
+      if (this.state === 'playing') this.updateEnemies(dt);
+      if (this.state === 'playing') this.updateBullets(dt);
+      if (this.state === 'playing') this.updatePickups(dt);
+      if (this.state === 'playing') this.updateOrbit(dt);
     } else if (this.state === 'over') {
       this.playerDuck.update(dt, { moving: false });
       for (const e of this.enemies) e.duck.update(dt, { moving: false, aimYaw: e.duck.yaw });
@@ -561,8 +574,8 @@ export class Game {
     this.hud.coins(this.coins);
     this.hud.setWeapon(this.loadout.gun.label, this.gunId);
     this.hud.growth(this.level, this.xp, xpForLevel(this.level), Object.values(this.cards).reduce((a, b) => a + b, 0));
-    this.hud.skills(this.loadout.skills, this.skillCd, { rage: p.rageT, shield: p.shield, slow: this.slowT });
-    // 护盾条按「本局最大护盾」归一：技能盾 / 开工护盾 / 溢出治疗护盾共用一条
+    this.hud.skills(this.loadout.skills, this.skillCd, { rage: p.rageT, shield: p.shieldSkillT, slow: this.slowT });
+    // 护盾条按「本局最大护盾」归一：福利 / 技能盾 / 卡牌共用显示，限时部分独立到期。
     this.hud.shield(p.shield, Math.max(p.shieldMax, 1), p.shield);
     const spread = this.spreadNow();
     // 准星只是方向：鼠标瞄准时钉在指针处、手柄瞄准时取虚拟瞄准点的投影，
@@ -603,10 +616,14 @@ export class Game {
     for (const id of Object.keys(this.skillCd)) this.skillCd[id] = Math.max(0, this.skillCd[id] - dt);
     this.guardianCd = Math.max(0, this.guardianCd - dt);
     p.rageT = Math.max(0, p.rageT - dt);
-    // 护盾池统一：蹲防技能有时限，开工护盾卡不限时（破盾或下波刷新）
-    if (p.shield > 0 && p.shieldSkillT > 0) {
+    p.hasteT = Math.max(0, p.hasteT - dt);
+    // 蹲防到期只撤回尚未消耗的技能盾，保留福利 / 开工护盾 / 溢出治疗护盾。
+    if (p.shieldSkillT > 0) {
       p.shieldSkillT = Math.max(0, p.shieldSkillT - dt);
-      if (p.shieldSkillT <= 0) p.shield = 0;
+      if (p.shieldSkillT <= 0) {
+        p.shield = Math.max(0, p.shield - p.skillShield);
+        p.skillShield = 0;
+      }
     }
     if (this.slowT > 0) { this.slowT = Math.max(0, this.slowT - dt); if (this.slowT <= 0) this.slowFactor = 1; }
     if (k.has('Space') && p.dashCd <= 0) {
@@ -619,7 +636,7 @@ export class Game {
       k.delete('Space');
     }
 
-    const sm = this.loadout.speedMul;
+    const sm = this.loadout.speedMul * (p.hasteT > 0 ? 1.25 : 1);
     const target = p.dashT > 0 ? p.dashDir.clone().multiplyScalar(13.5 * sm) : dir.clone().multiplyScalar(6.2 * sm);
     p.vel.lerp(target, 1 - Math.exp(-dt * (p.dashT > 0 ? 30 : 11)));
     p.pos.addScaledVector(p.vel, dt);
@@ -814,7 +831,7 @@ export class Game {
       if (i >= lo.pellets) org.addScaledVector(side, ((i - lo.pellets) % 2 === 0 ? 1 : -1) * 0.28);
       const b = { pos: org, vel: d.multiplyScalar(lo.bulletSpeed), life: 1.1, traveled: 0, range: lo.range, dmg,
         pierce: lo.mods.pierce || 0 };
-      b.vis = this.makeBulletVis(raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : 0xffd080, 1.6);
+      b.vis = this.makeBulletVis(raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : (lo.gun.accent ?? 0xffd080), 1.6);
       b.vis.position.copy(b.pos);
       b.vis.lookAt(b.pos.clone().add(b.vel));
       this.bullets.push(b);
@@ -860,9 +877,11 @@ export class Game {
     if (p.shield > 0) {
       const absorbed = Math.min(p.shield, amount);
       p.shield -= absorbed; amount -= absorbed;
+      p.skillShield = Math.max(0, p.skillShield - absorbed); // 优先消耗有时限的部分
+      if (p.skillShield <= 0) p.shieldSkillT = 0;
       this.fx.ring(p.pos.clone().setY(0.6), 0x7ee06a, 1.3);
       this.audio.hit();
-      if (p.shield <= 0) { p.shieldSkillT = 0; this.hud.toast('护盾被破！快溜'); }
+      if (p.shield <= 0) this.hud.toast('护盾被破！快溜');
       if (amount <= 0) { this.thornsBlast(mods); return; }
     }
     p.hp -= amount;
@@ -965,8 +984,7 @@ export class Game {
     // 开工护盾（绿）：每波开始白给一层护盾
     const ws = this.loadout.mods.waveShield;
     if (ws) {
-      this.p.shield = Math.max(this.p.shield, ws);
-      this.p.shieldMax = Math.max(this.p.shieldMax, ws);
+      this.addShield(ws, ws);
       this.fx.ring(this.p.pos.clone().setY(0.6), 0x7ee06a, 2.2);
     }
     this.hud.banner(this.wave, waveIntro(this.wave));
@@ -1067,7 +1085,7 @@ export class Game {
   // 菜单手柄导航：方向键/D-pad 移动焦点，A 确认；焦点环复用 :focus 样式
   menuFocusables() {
     const sel = {
-      shop: '#shopScreen .shopTabs button, #shopScreen .tile, #shopClose',
+      weapons: '#weaponGrid .weaponCard, #weaponClose',
       card: '#cardScreen .pickCard',
       cardbook: '#cardBookClose',
       paused: '#pauseScreen button, #pauseScreen input',
@@ -1127,12 +1145,12 @@ export class Game {
       this.mouse.down = this.mouseFire || this.padFire;
       if (edge(0)) k.add('Space');
       if (edge(2)) k.add('KeyR');
-      if (edge(1)) this.openShop();
+      if (edge(1)) this.openWeapons();
       if (edge(3)) this.openCardBook();
       if (edge(9)) this.pause();
       if (edge(4)) this.cycleGun(-1);
       if (edge(5)) this.cycleGun(1);
-    } else if (this.state === 'shop' || this.state === 'card' || this.state === 'cardbook' || this.state === 'paused') {
+    } else if (this.state === 'weapons' || this.state === 'card' || this.state === 'cardbook' || this.state === 'paused') {
       // 菜单内：方向导航 + A 确认 + B/Start 返回
       const now = this.t;
       const nx = (lx > 0.55 || btn(15)) ? 1 : (lx < -0.55 || btn(14)) ? -1 : 0;
@@ -1154,10 +1172,11 @@ export class Game {
         if (el) {
           if (el.tagName === 'INPUT') el.focus();
           else el.click();
-          if (el.tagName === 'BUTTON' && !el.closest('.tile')) el.blur();
+          // 武器卡购买后会重绘并恢复焦点，不要把新焦点清掉。
+          if (el.tagName === 'BUTTON' && !el.classList.contains('weaponCard')) el.blur();
         }
       }
-      if (this.state === 'shop' && (edge(1) || edge(9))) this.closeShop();
+      if (this.state === 'weapons' && (edge(1) || edge(9))) this.closeWeapons();
       else if (this.state === 'cardbook' && (edge(3) || edge(1) || edge(9))) this.closeCardBook();
       else if (this.state === 'paused' && (edge(9) || edge(1))) this.resume();
       // 选卡界面必须选一张，B/Start 不能跳过
@@ -1424,12 +1443,9 @@ export class Game {
       this.p.hp = Math.min(this.p.maxHp, this.p.hp + this.loadout.killHeal);
       const healed = this.p.hp - before;
       if (healed > 0.5) this.fx.number(this.p.pos.clone().setY(this.p.pos.y + 1.2), `+${Math.round(healed)}`, '#7ee06a');
-      // 溢出治疗转护盾（吃鸭补鸭 2 层起）
+      // 溢出治疗转不限时护盾，不得缩减已有的福利盾或开工护盾。
       const over = this.loadout.killHeal - healed;
-      if (mods.overheal && over > 0.5) {
-        this.p.shield = Math.min(mods.overheal, this.p.shield + over);
-        this.p.shieldMax = Math.max(this.p.shieldMax, this.p.shield);
-      }
+      if (mods.overheal && over > 0.5) this.addShield(over, mods.overheal);
     }
     if (mods.ammoBack && Math.random() < mods.ammoBack) {
       this.p.reserve += 2;
@@ -1450,7 +1466,7 @@ export class Game {
       }
     }
     if (isBoss) {
-      this.hud.toast(`${e.name}被击败！缴获大量鸭杂`);
+      this.hud.toast(`${e.name}被击败！追回工资和福利`);
       this.audio.waveClear();
       this.fx.ring(e.pos.clone().setY(e.pos.y + 1), 0xffd24a, 4);
     }
@@ -1478,7 +1494,7 @@ export class Game {
             const r = e.radius + 0.22;
             if (Math.hypot(b.pos.x - e.pos.x, b.pos.z - e.pos.z) < r && b.pos.y < 1.7 * e.scale) {
               const dmg = damageAtDistance(b.dmg, b.traveled, this.loadout);
-              this.hits++;
+              if (!b.countedHit) { this.hits++; b.countedHit = true; } // 穿透多名目标仍只算这一弹命中
               this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.4), 7, 0xffd080, 6);
               this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 4, 2);
               this.audio.hit();
@@ -1580,50 +1596,11 @@ export class Game {
   /* ---------------- 拾取 ---------------- */
 
   spawnPickup(pos, kind, item) {
-    const g = new THREE.Group();
-    let glowColor = 0xff8070;
-    if (kind === 'ammo') {
-      const box = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.32),
-        new THREE.MeshStandardMaterial({ color: 0x6a5a3a, roughness: 0.8 }));
-      box.castShadow = true;
-      g.add(box);
-      const band = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.1, 0.34),
-        new THREE.MeshStandardMaterial({ color: 0x3a3010, emissive: 0xffd95e, emissiveIntensity: 1.6 }));
-      g.add(band);
-      glowColor = 0xffd95e;
-    } else if (kind === 'loot') {
-      const it = LOOT_BY_ID[item];
-      const bundle = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10),
-        new THREE.MeshStandardMaterial({ color: it.color, roughness: 0.7 }));
-      bundle.scale.set(1.2, 0.85, 1);
-      bundle.castShadow = true;
-      g.add(bundle);
-      const knot = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8),
-        new THREE.MeshStandardMaterial({ color: 0xf0e6d0, roughness: 0.9 }));
-      knot.position.y = 0.14;
-      g.add(knot);
-      glowColor = it.color;
-    } else {
-      const bread = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10),
-        new THREE.MeshStandardMaterial({ color: 0xe8b464, roughness: 0.75 }));
-      bread.scale.set(1.3, 0.8, 0.9);
-      bread.castShadow = true;
-      g.add(bread);
-      const cross1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.06, 0.06),
-        new THREE.MeshStandardMaterial({ color: 0xd03028, emissive: 0xd03028, emissiveIntensity: 0.8 }));
-      cross1.position.y = 0.18;
-      const cross2 = cross1.clone();
-      cross2.rotation.y = Math.PI / 2;
-      g.add(cross1, cross2);
-    }
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowSprite(), color: glowColor,
-      transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-    glow.scale.set(1.3, 1.3, 1);
-    g.add(glow);
-    g.position.copy(pos).setY(pos.y + 0.35);
-    this.engine.scene.add(g);
-    this.pickups.push({ mesh: g, kind, item, t: 0, life: kind === 'loot' ? 26 : 22 });
+    const mesh = makePickupVisual(kind, item);
+    if (!mesh) return;
+    mesh.position.copy(pos).setY(groundHeight(pos.x, pos.z) + 0.35);
+    this.engine.scene.add(mesh);
+    this.pickups.push({ mesh, kind, item, t: 0, life: kind === 'loot' ? 26 : 22 });
   }
 
   updatePickups(dt) {
@@ -1653,9 +1630,10 @@ export class Game {
           this.hud.toast(`拾取弹药箱 +${n}`);
         } else if (pk.kind === 'loot') {
           const it = LOOT_BY_ID[pk.item];
-          this.inv[pk.item] = (this.inv[pk.item] || 0) + 1;
-          this.hud.toast(`拾取 ${it.label} ×1 · B 键商店出售`);
-          this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), it.label, '#ffe28a');
+          this.coins += it.coins; this.coinsEarned += it.coins;
+          const eff = this.applyLootEffect(it.effect);
+          this.hud.toast(`拾取 ${it.label} · +${it.coins} 金币${eff ? ' · ' + eff : ''}`);
+          this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${it.label} +${it.coins}`, '#ffe28a');
         } else {
           p.hp = Math.min(p.maxHp, p.hp + 35);
           this.hud.toast('拾取面包 +35 生命');

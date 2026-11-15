@@ -56,6 +56,19 @@ async function renderCards() {
     const send = (method, params = {}) => new Promise((res) => { const id = ++msgId; pending.set(id, res); ws.send(JSON.stringify({ id, method, params })); });
     await send('Page.enable');
     await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+    // 在录制入口迁移章节文案，保留 shots/cards.html 模板与既有章节编号。
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      document.addEventListener('DOMContentLoaded', () => {
+        const captions = {
+          3: { title: '波次强化卡', sub: '每波三选一 · 普通 / 稀有 / 传说 · 可重复叠层' },
+          4: { title: '武器与福利', sub: '四把模型枪 · 金币购买 / 装备 · 福利拾取即生效' },
+        };
+        const caption = captions[new URLSearchParams(location.search).get('c')];
+        if (!caption) return;
+        document.querySelector('#wrap h1').textContent = caption.title;
+        document.querySelector('#wrap .sub').textContent = caption.sub;
+      });
+    ` });
     for (const c of ['1', '2', '3', '4', 'end']) {
       await send('Page.navigate', { url: `file:///D:/Code/swyy/shots/cards.html?c=${c}` });
       await sleep(700);
@@ -108,7 +121,8 @@ addFrames('skills', M.skills, M.shop, 'full');
 addCard('card3', 1.8, 'music');
 addFrames('talents', M.talents, M.skills, 'full');
 addCard('card4', 1.8, 'music');
-addFrames('shop', M.shop, M.over, 'full');
+addFrames('weapons', M.shop, M.benefits, 'full');
+addFrames('benefits', M.benefits, M.over, 'full');
 addFrames('over', M.over, M.end, 'full');
 addCard('cardend', 2.5, 'music', M.over + 1.2 - musicStart);
 
