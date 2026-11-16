@@ -157,17 +157,17 @@ describe('开局与单一订阅账本', () => {
 
   it('切换与切回均付全费/丢旧额度，不能保有多个计划；冷却不被切换重置', () => {
     const g = subscribed(); g.nextWave(); g.tokens = 40; g.p.fireT = 0.2;
-    g.protections.us_phone = 2;
+    g.protections.us_phone = [99, 99];
     g.openWeapons(); expect(g.subscribe('glm')).toBe(true);
     expect(g.state).toBe('weapons'); expect(g.tokens).toBe(1600); expect(g.coins).toBe(121);
     expect(g.subscribe('ds')).toBe(true);
     expect(g.planId).toBe('ds'); expect(g.tokens).toBe(2000); expect(g.coins).toBe(106);
-    expect(g.protections.us_phone).toBe(2); expect(g.p.fireT).toBe(0.2);
+    expect(g.protections.us_phone).toHaveLength(2); expect(g.p.fireT).toBe(0.2);
     expect(g.coinsEarned).toBe(0);
   });
 
   it('切换余额不足完全保留原计划、额度、属性和保护计数', () => {
-    const g = subscribed(); g.coins = 43; g.tokens = 19; g.protections.kyc = 3;
+    const g = subscribed(); g.coins = 43; g.tokens = 19; g.protections.kyc = [99, 99, 99];
     g.openWeapons(); const before = balances(g), lo = g.loadout;
     expect(g.subscribe('glm')).toBe(false);
     expect(balances(g)).toEqual(before); expect(g.loadout).toBe(lo); expect(g.planId).toBe('ds');
@@ -289,13 +289,13 @@ describe('武器调用计费与封号', () => {
     expect(boundary.fire()).toBe(true); expect(boundary.state).toBe('playing');
     const below = subscribed(id); below.banRng.mockReturnValue(risk - 1e-10);
     expect(below.fire()).toBe(false); expect(below.state).toBe('over'); expect(below.result.reason).toBe('ban');
-    expect(below.tokens).toBe(968); expect(below.calls).toBe(1); expect(below.tokensUsed).toBe(32);
+    expect(below.tokens).toBe(PLANS[id].quota - PLANS[id].tokensPerCall); expect(below.calls).toBe(1); expect(below.tokensUsed).toBe(PLANS[id].tokensPerCall);
     expect(below.shots).toBe(0); expect(below.bullets).toHaveLength(0);
     expect(below.result).toMatchObject({ reason: 'ban', provider: id, providerLabel: PLANS[id].label });
   });
 
   it.each(['qwen', 'glm', 'ds'])('%s 无封号快路径，不能误应用正概率地板', (id) => {
-    const g = subscribed(id); g.protections.us_phone = 99999;
+    const g = subscribed(id); g.protections.us_phone = [99];
     g.banRng.mockImplementation(() => { throw new Error('安全计划不应抽封号'); });
     expect(g.currentBanChance()).toBe(0); expect(g.fire()).toBe(true); expect(g.state).toBe('playing');
   });
@@ -303,13 +303,13 @@ describe('武器调用计费与封号', () => {
   it('封号无视无敌/护盾/守护/不死鸟；最低风险仍可触发且已付混合用量不退款', () => {
     const g = subscribed('claude');
     g.cards = { g_phoenix: 1, g_guardian: 1 }; g.recomputeLoadout();
-    g.protections.us_phone = 10000; expect(g.currentBanChance()).toBe(0.00025);
+    g.protections.us_phone = Array(10000).fill(99); expect(g.currentBanChance()).toBeCloseTo(0.0025);
     g.p.iframes = 9999; g.p.shield = 9999; g.p.skillShield = 80; g.p.shieldSkillT = 6;
     g.tokens = 20; const before = g.walletMicros; g.banRng.mockReturnValue(0);
     expect(g.fire()).toBe(false);
     expect(g.state).toBe('over'); expect(g.p.hp).toBe(0);
     expect(g.p.shield).toBe(9999); expect(g.guardianCd).toBe(0); expect(g.phoenixUsed).toBe(false);
-    expect(g.tokens).toBe(0); expect(g.walletMicros).toBe(before - coinsToMicros(1.92));
+    expect(g.tokens).toBe(0); expect(g.walletMicros).toBe(before - coinsToMicros(12.8));
     expect(g.calls).toBe(1); expect(g.shots).toBe(0);
     expect(g.playerDuck.die).toHaveBeenCalledTimes(1); expect(g.playerHpBar.group.visible).toBe(false);
   });
@@ -323,24 +323,25 @@ describe('武器调用计费与封号', () => {
     expect(g.banRng).not.toHaveBeenCalled(); expect(g.state).toBe('playing');
   });
 
-  it('在途弹道保存原计划衰减/穿透/特效，付费切换不改变旧调用伤害', () => {
+  it('在途弹道保存原计划衰减/特效，付费切换不改变旧调用伤害；导弹命中即引爆不穿透', () => {
     const g = subscribed('claude'); g.cards = { r_pierce: 2, r_frost: 1 }; g.recomputeLoadout();
     const oldMods = g.loadout.mods;
     expect(g.fire()).toBe(true);
     const b = g.bullets[0], attack = b.attack;
-    expect(b.pierce).toBe(3); expect(attack.provider).toBe('claude');
+    expect(b.pierce).toBe(0); expect(attack.provider).toBe('claude'); // 导弹命中引爆，穿甲卡对其无效
     expect(attack.mods).not.toBe(oldMods); expect(attack.mods.frost).not.toBe(oldMods.frost);
     oldMods.frost.factor = 0.99; expect(attack.mods.frost.factor).toBe(0.5);
+    g.coins = 100; g.walletMicros = coinsToMicros(100); // Claude 订阅费提高后补足余额，确保付费切换成功
     g.openWeapons(); g.subscribe('glm'); g.closeWeapons();
     const e = enemy('brawler', 10000); e.pos.set(0, 0, 10); g.enemies = [e];
     b.pos.set(0, 0.8, 9.8); b.vel.set(0, 0, 60); b.traveled = 40;
     g.applyHitMods = vi.fn();
     g.updateBullets(0.01);
-    const expected = rules.damageAtDistance(68, 40.3, attack);
+    const expected = rules.damageAtDistance(100, 40.3, attack);
     expect(e.hp).toBeCloseTo(10000 - expected);
-    expect(expected).not.toBeCloseTo(rules.damageAtDistance(68, 40.3, g.loadout));
+    expect(expected).not.toBeCloseTo(rules.damageAtDistance(100, 40.3, g.loadout));
     expect(g.applyHitMods).toHaveBeenCalledWith(e, expect.any(THREE.Vector3), expect.closeTo(expected), attack.mods);
-    expect(g.hits).toBe(1); expect(b.pierce).toBe(2);
+    expect(g.hits).toBe(1); expect(b.pierce).toBe(0); expect(g.bullets).toHaveLength(0); // 命中即引爆消失
   });
 });
 
@@ -366,12 +367,12 @@ describe('保护掉落、结算幂等与死亡帧', () => {
     const g = subscribed();
     for (let n = 0; n < 2; n++) for (const item of PROTECTION_ITEMS) g.spawnPickup(g.p.pos, 'protection', item.id);
     g.updatePickups(0.01); g.updatePickups(0.01);
-    expect(Object.values(g.protections)).toEqual([2, 2, 2, 2]); expect(g.pickups).toHaveLength(0);
+    expect(Object.values(g.protections).map((a) => a.length)).toEqual([2, 2, 2, 2]); expect(g.pickups).toHaveLength(0);
     expect(g.coins).toBe(165); expect(g.coinsEarned).toBe(0);
     g.nextWave(); g.openWeapons(); g.subscribe('gpt'); g.closeWeapons(); g.clearField();
-    expect(Object.values(g.protections)).toEqual([2, 2, 2, 2]);
-    expect(g.currentBanChance()).toBeCloseTo(banChance('gpt', { us_phone: 8 }));
-    g.start(); expect(Object.values(g.protections)).toEqual([0, 0, 0, 0]); expect(g.planId).toBeNull();
+    expect(Object.values(g.protections).map((a) => a.length)).toEqual([2, 2, 2, 2]);
+    expect(g.currentBanChance()).toBeCloseTo(banChance('gpt', { us_phone: Array(8).fill(99) }));
+    g.start(); expect(Object.values(g.protections)).toEqual([[], [], [], []]); expect(g.planId).toBeNull();
   });
 
   it('额外保护掉落不挤占正常福利和回血分支', () => {
@@ -545,21 +546,21 @@ describe('审查回归：纯手柄免费技能', () => {
     expect(cast).not.toHaveBeenCalled(); expect(g.skillCd.storm).toBe(0);
   });
 
-  it('真实42次Claude调用耗尽预算后，纯手柄免费击杀能恢复射击', () => {
+  it('真实14次Claude调用耗尽预算后，纯手柄免费击杀能恢复射击', () => {
     const g = subscribed('claude'), poll = installGamepad(g);
-    for (let i = 0; i < 42; i++) { g.p.fireT = 0; expect(g.fire()).toBe(true); }
-    expect(g.tokens).toBe(0); expect(g.coins).toBe(4.96); expect(g.calls).toBe(42);
+    for (let i = 0; i < 14; i++) { g.p.fireT = 0; expect(g.fire()).toBe(true); }
+    expect(g.tokens).toBe(0); expect(g.coins).toBe(6); expect(g.calls).toBe(14);
     g.p.fireT = 0; expect(g.fire()).toBe(false);
-    const e = enemy('brawler', 1); g.enemies = [e];
+    const e1 = enemy('brawler', 1), e2 = enemy('brawler', 1); g.enemies = [e1, e2];
     const calls = g.calls, used = g.tokensUsed, draws = g.banRng.mock.calls.length;
     poll(12);
-    expect(e.dead).toBe(true); expect(g.coins).toBeGreaterThan(4.96);
+    expect(e1.dead).toBe(true); expect(e2.dead).toBe(true); expect(g.coins).toBeGreaterThan(6);
     expect(g.skillCd.storm).toBeGreaterThan(0);
     expect(g.calls).toBe(calls); expect(g.tokensUsed).toBe(used);
     expect(g.banRng).toHaveBeenCalledTimes(draws);
     const wallet = g.walletMicros;
     expect(g.fire()).toBe(true); expect(g.calls).toBe(calls + 1);
-    expect(g.walletMicros).toBe(wallet - coinsToMicros(5.12));
+    expect(g.walletMicros).toBe(wallet - coinsToMicros(16));
     expect(g.banRng).toHaveBeenCalledTimes(draws + 1); expect(g.state).toBe('playing');
   });
 });

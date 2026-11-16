@@ -573,10 +573,10 @@ try {
       dom: [...document.querySelectorAll('#protectionCounts [data-protection]')].map(el => ({ id: el.dataset.protection, text: el.textContent })),
       left: g.pickups.length }; })()`);
   check('四种保护物品真实拾取各叠一层，只结算一次且不赠送 Token/金币', protections.left === 0
-    && protections.sameFunds && ['us_phone', 'us_credit', 'us_ip', 'kyc'].every(id => protections.stacks[id] === 1)
+    && protections.sameFunds && ['us_phone', 'us_credit', 'us_ip', 'kyc'].every(id => protections.stacks[id].length === 1)
     && protections.dom.length === 4 && protections.dom.every(el => /1/.test(el.text)), JSON.stringify(protections));
-  check('四层保护把 Claude 每次虚构封号风险乘 0.8⁴ 但不归零', protections.before === 0.005
-    && Math.abs(protections.after - 0.005 * 0.8 ** 4) < 1e-12 && protections.after > 0, JSON.stringify(protections));
+  check('四层保护把 Claude 每次虚构封号风险乘 0.8⁴ 但不归零', protections.before === 0.05
+    && Math.abs(protections.after - 0.05 * 0.8 ** 4) < 1e-12 && protections.after > 0, JSON.stringify(protections));
   await key('KeyB', 66, true); await key('KeyB', 66, false); await sleep(150);
   await key('Escape', 27, true); await key('Escape', 27, false); await sleep(200);
   check('Esc 关闭已订阅面板而非切换到暂停', (await snap()).state === 'playing');
@@ -602,17 +602,17 @@ try {
       coins: g.walletMicros, earned: g.coinsEarned, shots: g.bullets.length, phoenix: g.phoenixUsed,
       settlements: window.__banResultsCalls, reason: document.getElementById('overSub').textContent + ' ' + document.getElementById('overReason').textContent }; })()`);
   check('强制封号绕过无敌/护盾/结界/不死鸟，已付调用只耗一次资源且不出弹', banned.state === 'over'
-    && banned.hp === 0 && banned.tokens === banned.before.tokens - 32 && banned.calls === banned.before.calls + 1
-    && banned.used === banned.before.used + 32 && banned.coins === banned.before.coins && banned.shots === 0 && !banned.phoenix, JSON.stringify(banned));
-  check('封号仅结算一次、死亡帧不再领工资，结果说明是 Claude 的虚构游戏机制', banned.settlements === 1
-    && banned.earned === banned.before.earned && /Claude/i.test(banned.reason) && /游戏|虚构/.test(banned.reason), JSON.stringify(banned));
+    && banned.hp === 0 && banned.tokens === banned.before.tokens - 100 && banned.calls === banned.before.calls + 1
+    && banned.used === banned.before.used + 100 && banned.coins === banned.before.coins && banned.shots === 0 && !banned.phoenix, JSON.stringify(banned));
+  check('封号仅结算一次、死亡帧不再领工资，结果说明提及封号原因', banned.settlements === 1
+    && banned.earned === banned.before.earned && /Claude/i.test(banned.reason) && /封号/.test(banned.reason), JSON.stringify(banned));
   await sleep(1400); await shot('subscription-ban');
   await clickSel('#retryBtn');
   const reset = await subscriptionSnap();
   const resetProtections = await evaluate('Object.values(window.__game.protections)');
   check('封号后真实点击重开返回订阅选择，预算/额度/调用/保护完整重置', reset.state === 'weapons'
     && reset.planId === null && reset.coins === 180 && reset.earned === 0 && reset.tokens === 0
-    && reset.calls === 0 && reset.tokensUsed === 0 && resetProtections.every(n => n === 0), JSON.stringify({ reset, resetProtections }));
+    && reset.calls === 0 && reset.tokensUsed === 0 && resetProtections.every(a => a.length === 0), JSON.stringify({ reset, resetProtections }));
   await evaluate('window.__game.banRng = () => 1');
   await clickSel('#weaponGrid button[data-plan="ds"]');
   await evaluate('window.__game.waveState = "inter"; window.__game.interT = 9999');

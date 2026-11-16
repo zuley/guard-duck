@@ -1,13 +1,11 @@
 import { CARD_BY_ID, CARD_RARITIES, SKILLS } from './rules.js';
 import {
-  PLANS, getPlan, quoteUsage, quoteSubscription, formatCoins, microsToCoins, STARTING_COINS,
-  PROTECTION_ITEMS, banChance,
+  PLANS, getPlan, quoteUsage, quoteSubscription, formatCoins, microsToCoins,
+  PROTECTION_ITEMS, PROTECTION_DURATION,
 } from './subscriptions.js';
 
 const $ = (id) => document.getElementById(id);
 const count = (n) => Number(n).toLocaleString('zh-CN');
-const riskFormatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 6 });
-const riskText = (chance) => riskFormatter.format(chance);
 const hex = (color) => '#' + color.toString(16).padStart(6, '0');
 
 // 自绘枪械轮廓；颜色呼应枪身与曳光，不使用任何厂商标志。
@@ -61,7 +59,7 @@ export class HUD {
       statWave: $('statWave'), statKills: $('statKills'), statScore: $('statScore'), statTime: $('statTime'),
       waveBanner: $('waveBanner'), waveTitle: $('waveTitle'), waveTip: $('waveTip'),
       tokensRemaining: $('tokensRemaining'), tokensGranted: $('tokensGranted'),
-      subscriptionStatus: $('subscriptionStatus'), usageHint: $('usageHint'), banRisk: $('banRisk'),
+      subscriptionStatus: $('subscriptionStatus'), usageHint: $('usageHint'),
       protectionCounts: $('protectionCounts'), weaponName: $('weaponName'), gunIcon: $('gunIcon'),
       killfeed: $('killfeed'), toast: $('toast'), alert: $('alertBanner'),
       crosshair: $('crosshair'), hitmarker: $('hitmarker'),
@@ -70,8 +68,7 @@ export class HUD {
       resWave: $('resWave'), resKills: $('resKills'), resScore: $('resScore'), resAcc: $('resAcc'),
       fps: $('fps'), loading: $('loading'),
       statCoins: $('statCoins'), weapons: $('weaponScreen'), weaponCoins: $('weaponCoins'),
-      weaponGrid: $('weaponGrid'), weaponIntro: $('weaponIntro'), weaponStatus: $('weaponStatus'),
-      weaponRisk: $('weaponRisk'), weaponProtections: $('weaponProtections'), weaponReferences: $('weaponReferences'),
+      weaponGrid: $('weaponGrid'), weaponReferences: $('weaponReferences'),
       overTitle: $('overTitle'), overSub: $('overSub'), overReason: $('overReason'), resCalls: $('resCalls'), resTokensUsed: $('resTokensUsed'),
       statRemain: $('statRemain'), resTime: $('resTime'), resCoins: $('resCoins'),
       resBest: $('resBest'), recordBadge: $('recordBadge'),
@@ -123,13 +120,10 @@ export class HUD {
     this.el.usageHint.textContent = !quote ? '选择订阅后开始 · 主动技能不耗 Token' : quote.costMicros > game.walletMicros
       ? `余额不足一次调用 · ${count(quote.tokens)} Token / 次；移动、技能和拾取仍可用`
       : `${count(quote.tokens)} Token / 次 · ${quote.costMicros ? `下次 ${formatCoins(microsToCoins(quote.costMicros))} 金币${quote.includedTokens ? '（部分按量）' : '（按量）'}` : '消耗本波额度'}`;
-    const risk = game.currentBanChance();
-    this.el.banRisk.textContent = `虚构封号风险 ${riskText(risk)} / 次调用`;
-    this.el.banRisk.classList.toggle('hasRisk', risk > 0);
-    this.renderProtections(this.el.protectionCounts, game.protections);
+    this.renderProtections(this.el.protectionCounts, game.protections, game.wave);
   }
 
-  renderProtections(container, protections = {}) {
+  renderProtections(container, protections = {}, wave) {
     if (!container) return;
     let refs = this._protectionRefs.get(container);
     if (!refs) {
@@ -137,7 +131,7 @@ export class HUD {
         const chip = document.createElement('span');
         chip.className = 'protectionChip';
         chip.dataset.protection = item.id;
-        chip.title = `${item.label} · 虚构游戏道具，整局叠加保留`;
+        chip.title = `${item.label} · 虚构游戏道具，持续 ${PROTECTION_DURATION} 波后销毁`;
         const icon = document.createElement('i');
         icon.className = 'protectionIcon'; icon.textContent = item.icon;
         icon.style.setProperty('--protection-color', hex(item.color));
@@ -148,14 +142,19 @@ export class HUD {
         amount.className = 'protectionCount';
         chip.append(icon, label, amount);
         container.appendChild(chip);
-        return { id: item.id, chip, amount };
+        return { id: item.id, chip, amount, baseTitle: chip.title };
       });
       this._protectionRefs.set(container, refs);
     }
     for (const ref of refs) {
-      const n = Number.isSafeInteger(protections?.[ref.id]) && protections[ref.id] > 0 ? protections[ref.id] : 0;
+      const arr = protections?.[ref.id];
+      const n = Array.isArray(arr) ? arr.length : 0;
       const text = `×${count(n)}`;
       if (ref.amount.textContent !== text) ref.amount.textContent = text;
+      const title = n > 0 && Number.isFinite(wave)
+        ? `${ref.baseTitle} · 最近一批剩余 ${arr.reduce((a, w) => Math.min(a, w), Infinity) - wave} 波`
+        : ref.baseTitle;
+      if (ref.chip.title !== title) ref.chip.title = title;
       ref.chip.classList.toggle('held', n > 0);
     }
   }
@@ -430,24 +429,8 @@ export class HUD {
 
   renderWeapons(game) {
     const plan = getPlan(game.planId);
-    const sub = game.subscription;
-    const nextWave = Math.max(1, game.wave + (game.waveState === 'inter' ? 1 : 0));
     this.el.weaponCoins.textContent = formatCoins(game.coins);
     $('weaponClose').textContent = plan ? '返回战斗 (B / Esc)' : '回到标题 (Esc)';
-    this.el.weaponIntro.textContent = !plan
-      ? `${formatCoins(STARTING_COINS)} 金币启动预算已备好。先手动确认一项订阅，再开始守卫；当前仅聚焦 DS，尚未扣款。`
-      : game.waveState === 'inter'
-        ? `波间休整 · 切换立即预付第 ${nextWave} 波，额度立即可用；该波开始不再重复收费或发放。`
-        : '工资变成调用预算。切换只在此面板明确确认，战斗中没有免费切换快捷键。';
-    this.el.weaponStatus.textContent = !plan ? '尚未订阅 · 选择期间战斗冻结，Esc 可返回标题'
-      : `${plan.label} · 剩余 ${count(game.tokens)} / 本次发放 ${count(game.quotaGranted)} Token · ${game.subscriptionStatus === 'metered'
-        ? `第 ${sub.processedWave} 波未续费，按量计费；本波不自动重扣`
-        : `已支付第 ${sub.paidWave} 波${sub.paidWave > game.wave ? '（已预付）' : ''}`}`;
-    this.el.weaponStatus.classList.toggle('metered', game.subscriptionStatus === 'metered');
-    this.el.weaponRisk.textContent = plan
-      ? `当前虚构封号风险 ${riskText(game.currentBanChance())} / 成功付费调用；道具整局叠加保留，不能消除 Claude / GPT 的风险。`
-      : '封号概率仅为虚构游戏平衡值，不是任何真实平台的规则或统计。';
-    this.renderProtections(this.el.weaponProtections, game.protections);
 
     // 付费后仍聚焦同一卡；首次开局只聚焦 DS，绝不自动订阅。
     const focused = document.activeElement?.closest('.weaponCard')?.dataset.plan;
@@ -464,8 +447,7 @@ export class HUD {
       const equipped = game.planId === candidate.id;
       const affordable = subscription.feeMicros <= game.walletMicros;
       const rate = formatCoins(microsToCoins(usage.rateMicros * 1000));
-      const risk = riskText(banChance(candidate.id, game.protections));
-      const action = equipped ? '当前订阅 · 不重复扣款' : affordable ? (plan ? '付费切换' : '确认订阅')
+      const action = equipped ? '当前订阅' : affordable ? (plan ? '付费切换' : '确认订阅')
         : `还差 ${formatCoins(microsToCoins(subscription.feeMicros - game.walletMicros))} 金币`;
       const tile = document.createElement('button');
       tile.type = 'button';
@@ -474,7 +456,7 @@ export class HUD {
       tile.style.setProperty('--gun-accent', hex(candidate.accent));
       tile.setAttribute('aria-pressed', String(equipped));
       tile.setAttribute('aria-disabled', String(!affordable || equipped));
-      tile.setAttribute('aria-label', `${candidate.label}，每波 ${formatCoins(candidate.fee)} 金币，发放 ${count(subscription.quota)} Token，每次调用 ${count(usage.tokens)} Token，超额每千 Token ${rate} 金币，虚构封号风险 ${risk} 每次调用。${action}`);
+      tile.setAttribute('aria-label', `${candidate.label}，每波 ${formatCoins(candidate.fee)} 金币，发放 ${count(subscription.quota)} Token，每次调用 ${count(usage.tokens)} Token，超额每千 Token ${rate} 金币。${action}`);
       const art = put('weaponArt', '');
       art.appendChild(weaponIcon(candidate.id));
       const stats = put('weaponStats', '');
@@ -482,22 +464,16 @@ export class HUD {
         ['每波额度', `${count(subscription.quota)} Token`],
         ['每次调用', `${count(usage.tokens)} Token`],
         ['超额 / 千 Token', `${rate} 金币`],
-        ['虚构封号 / 次', risk],
       ]) {
         const row = put('', '');
         row.append(put('', label), put('', value, 'b'));
         stats.appendChild(row);
       }
       const combat = put('weaponCombat', `伤害 ${candidate.damage}${candidate.pellets > 1 ? ` × ${candidate.pellets}` : ''} · ${candidate.rpm}/分 · ${candidate.range}m`);
-      const reference = put('weaponReference', '');
-      reference.append(
-        put('weaponIndex', `AA 指数 ${candidate.reference.score} · ${candidate.reference.effort}`),
-        put('weaponModel', candidate.reference.model),
-        put('weaponDate', `参考日期 ${candidate.reference.date}`),
-      );
+      const desc = put('weaponDesc', candidate.desc);
       const foot = put('weaponFoot', '');
       foot.append(put('weaponPrice', `${formatCoins(candidate.fee)} 金币 / 波`), put('weaponAction', action));
-      tile.append(art, put('weaponName', candidate.label, 'b'), put('weaponTag', candidate.tag), stats, combat, reference, foot);
+      tile.append(art, put('weaponName', candidate.label, 'b'), put('weaponTag', candidate.tag), stats, combat, desc, foot);
       // 不绑定 keydown：只用 button 原生 Space/Enter，避免一次确认重复扣款。
       tile.addEventListener('click', () => game.subscribe(candidate.id));
       tile.addEventListener('mouseenter', () => game.audio.uiHover());
@@ -516,9 +492,9 @@ export class HUD {
     const details = this.el.weaponReferences;
     if (details.childElementCount) return;
     const summary = document.createElement('summary');
-    summary.textContent = '静态参考、口径与换算';
+    summary.textContent = '定价与能力参考';
     const note = document.createElement('p');
-    note.textContent = '真实 API 价格仅作静态参考（美元 / 百万 Token，非缓存输入；地区、上下文及峰谷限定见各项）。游戏金币按 1:3 输入 / 输出混合价映射，订阅约比同量按量优惠 25%；不是现实聊天会员套餐。AA 指数不是百分制，也不等于武器能力的线性倍数。';
+    note.textContent = 'API 参考价：美元 / 百万 Token，非缓存输入。金币按输入:输出 = 1:3 换算，订阅约省 25%，非真实会员套餐。战斗属性非模型实测，AA 指数非百分制。';
     details.append(summary, note);
     const list = document.createElement('ul');
     for (const plan of Object.values(PLANS)) {
@@ -640,11 +616,11 @@ export class HUD {
     const banned = reason === 'ban';
     const label = providerLabel || getPlan(provider)?.label || '当前计划';
     this.el.over.dataset.reason = banned ? 'ban' : 'combat';
-    this.el.overTitle.textContent = banned ? '鸭鸭被封号了' : '鸭鸭倒下了';
-    this.el.overSub.textContent = banned ? `${label} 的调用中断了本次守卫` : '农场失守…但羽毛仍在风中飘扬';
+    this.el.overTitle.textContent = banned ? '鸭鸭已被封号' : '鸭鸭倒下了';
+    this.el.overSub.textContent = banned ? `${label} 账号已被平台封禁` : '农场失守…但羽毛仍在风中飘扬';
     this.el.overReason.textContent = banned
-      ? '死亡原因：虚构游戏封号。成功付费调用后随机触发，本次资源已消耗，未发出攻击；护盾和免死无法抵挡。不代表真实平台的规则或统计。'
-      : '死亡原因：战斗阵亡。下次留一点调用预算，额度用完后还可以按量继续守卫。';
+      ? `死亡原因：${label} 触发平台风控被封号，护盾和免死无法抵挡。`
+      : '死亡原因：战斗阵亡。额度用完后还可以按量继续守卫。';
     this.el.overReason.classList.toggle('ban', banned);
     this.el.recordBadge.classList.toggle('hidden', !isRecord);
   }

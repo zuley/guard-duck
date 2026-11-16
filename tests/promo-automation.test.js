@@ -41,7 +41,7 @@ function planHarness({ initial = {}, afterClick } = {}) {
 
 function collectPickup(game, pickup) {
   game.pickups = game.pickups.filter((p) => p !== pickup);
-  game.protections[pickup.item]++;
+  game.protections[pickup.item].push(99);
 }
 
 function pickupHarness({ magnet, onPoll = (game, pickup, poll) => {
@@ -51,7 +51,7 @@ function pickupHarness({ magnet, onPoll = (game, pickup, poll) => {
   let held = null, current, polls = 0;
   const game = {
     walletMicros: 123 * MICROCOINS_PER_COIN,
-    protections: Object.fromEntries(PROTECTION_ITEMS.map(({ id }, i) => [id, i + 1])),
+    protections: Object.fromEntries(PROTECTION_ITEMS.map(({ id }, i) => [id, Array(i + 1).fill(99)])),
     pickups: [],
     loadout: { mods: magnet === undefined ? {} : { magnet: { mul: magnet } } },
     p: {
@@ -213,7 +213,7 @@ describe('collectProtections', () => {
   it.each([undefined, 3])('collects in item order with alternating movement and magnet=%s', async (magnet) => {
     const h = pickupHarness({ magnet });
     const wallet = h.game.walletMicros;
-    const stacks = { ...h.game.protections };
+    const stacks = Object.fromEntries(Object.entries(h.game.protections).map(([k, v]) => [k, [...v]]));
     await h.collectProtections();
     const offset = Math.max(3, 1.1 * (magnet || 1) * 2.6 + 0.8);
     const expected = PROTECTION_ITEMS.flatMap(({ id }, i) => {
@@ -222,7 +222,7 @@ describe('collectProtections', () => {
       expect(h.game.spawnPickup.mock.calls[i]).toEqual([
         { x: 10 + direction * offset, y: 2, z: -4 }, 'protection', id,
       ]);
-      expect(h.game.protections[id]).toBe(stacks[id] + 1);
+      expect(h.game.protections[id]).toHaveLength(stacks[id].length + 1);
       return [
         ['velocity', 0, 0, 0], ['spawn', id, 10 + direction * offset], ['sleep', 1200],
         ['key', code, vk, true], ['sleep', 100], ['poll', id, 1],
@@ -239,9 +239,9 @@ describe('collectProtections', () => {
   });
 
   it.each([
-    ['pickup still present', (g, pickup) => { g.protections[pickup.item]++; }],
+    ['pickup still present', (g, pickup) => { g.protections[pickup.item].push(99); }],
     ['no stack added', (g) => { g.pickups = []; }],
-    ['two stacks added', (g, pickup) => { collectPickup(g, pickup); g.protections[pickup.item]++; }],
+    ['two stacks added', (g, pickup) => { collectPickup(g, pickup); g.protections[pickup.item].push(99); }],
     ['wallet changed', (g, pickup) => { collectPickup(g, pickup); g.walletMicros++; }],
   ])('times out after 40 polls with %s and releases movement before throwing', async (_name, mutate) => {
     const h = pickupHarness({ onPoll: (g, pickup, poll) => { if (poll === 1) mutate(g, pickup); } });

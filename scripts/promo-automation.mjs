@@ -38,7 +38,7 @@ export function createPromoActions({ evaluate, clickSel, key, sleep }) {
         const pos = g.p.pos.clone();
         pos.x += ${direction} * Math.max(3, 1.1 * (g.loadout.mods.magnet?.mul || 1) * 2.6 + 0.8);
         g.spawnPickup(pos, 'protection', '${item.id}');
-        return { stacks: g.protections['${item.id}'], walletMicros: g.walletMicros }; })()`);
+        return { stacks: g.protections['${item.id}'].length, walletMicros: g.walletMicros }; })()`);
       await sleep(1200);
       const code = direction > 0 ? 'KeyD' : 'KeyA', vk = direction > 0 ? 68 : 65;
       let collected = false;
@@ -48,7 +48,7 @@ export function createPromoActions({ evaluate, clickSel, key, sleep }) {
           await sleep(100);
           collected = await evaluate(`(() => { const g = window.__game;
             return !g.pickups.some(p => p.kind === 'protection' && p.item === '${item.id}')
-              && g.protections['${item.id}'] === ${before.stacks + 1}
+              && g.protections['${item.id}'].length === ${before.stacks + 1}
               && g.walletMicros === ${before.walletMicros}; })()`);
           if (collected) break;
         }

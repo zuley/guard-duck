@@ -442,7 +442,7 @@ describe('五家订阅的战斗配装', () => {
     }
   });
   it('Claude 精准高伤、GPT 均衡、Qwen 高频、GLM 多弹丸、DS 低价长射程', () => {
-    expect(computeLoadout('claude')).toMatchObject({ damage: 68, rpm: 420, range: 54 });
+    expect(computeLoadout('claude')).toMatchObject({ damage: 100, rpm: 420, range: 54 });
     expect(computeLoadout('gpt')).toMatchObject({ damage: 45, rpm: 600, range: 44 });
     expect(computeLoadout('qwen')).toMatchObject({ damage: 21, rpm: 780, range: 34 });
     expect(computeLoadout('glm')).toMatchObject({ damage: 17, rpm: 180, pellets: 5, range: 22 });
@@ -460,10 +460,10 @@ describe('各订阅模型的距离衰减', () => {
     }
   });
   it('Claude 远战保留伤害比例高于 Qwen', () => {
-    const precision = damageAtDistance(68, 40, PLANS.claude);
+    const precision = damageAtDistance(100, 40, PLANS.claude);
     const rapid = damageAtDistance(21, 40, PLANS.qwen);
-    expect(precision / 68).toBeGreaterThan(rapid / 21);
-    expect(precision / 68).toBeGreaterThanOrEqual(0.8);
+    expect(precision / 100).toBeGreaterThan(rapid / 21);
+    expect(precision / 100).toBeGreaterThanOrEqual(0.8);
   });
   it('GLM 散射衰减更快，定位近距爆发', () => {
     const scatter = damageAtDistance(17, 15, PLANS.glm);

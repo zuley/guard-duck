@@ -2,13 +2,15 @@ import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
 import { FX } from './fx.js';
 import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
-import { PLANS, STARTING_COINS, getPlan, coinsToMicros, microsToCoins, quoteSubscription, quoteUsage, settleInvocation, banChance, PROTECTION_ITEMS, getProtection, rollProtection } from './subscriptions.js';
+import { PLANS, STARTING_COINS, getPlan, coinsToMicros, microsToCoins, quoteSubscription, quoteUsage, settleInvocation, banChance, PROTECTION_ITEMS, PROTECTION_DURATION, getProtection, rollProtection } from './subscriptions.js';
 import { ARENA, GATES, GATE_LANE_HALF, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
 import { textTexture } from './textures.js';
 import { makePickupVisual } from './pickups.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
 const GAMEPAD_SKILLS = [[12, 1], [15, 2], [13, 3], [14, 4]];
+// Claude 追踪导弹最大转向角速度（rad/s）：转弯半径 = 弹速 / 角速度，配合较低弹速得到柔和弧线而非急折线
+const MISSILE_TURN_RATE = 13;
 
 // 头顶名字精灵：贴图由 textTexture 内部统一缓存（32px 小栅格），此处不再自建缓存
 function makeNameSprite(text, color = '#ffffff', height = 0.3) {
@@ -70,7 +72,7 @@ export class Game {
     this.playerDuck = new Duck('player', 1, 'rifle', { planId: 'ds', accent: PLANS.ds.accent });
     engine.scene.add(this.playerDuck.group);
     this.playerDuck.group.position.set(0, 0, 3);
-    this.playerHpBar = this.makeHpBar(0x7ee06a, '鸭鸭', '#ffe9a8');
+    this.playerHpBar = this.makeHpBar(0x7ee06a, '打工鸭鸭', '#ffe9a8');
     this.playerHpBar.group.visible = false;
     const imGeo = new THREE.RingGeometry(0.22, 0.34, 24);
     imGeo.rotateX(-Math.PI / 2);
@@ -81,6 +83,23 @@ export class Game {
     this._bulletGeo.rotateX(Math.PI / 2);
     this._bulletMat = new THREE.MeshStandardMaterial({ color: 0xd8b060, roughness: 0.35, metalness: 0.85, emissive: 0x201004 });
     this._tailGeo = new THREE.BoxGeometry(0.05, 0.05, 1);
+    // 差异化子弹几何体：按价格梯度递增视觉复杂度
+    this._bulletGeoOrb = new THREE.SphereGeometry(0.06, 8, 6);
+    this._bulletGeoTracer = new THREE.CapsuleGeometry(0.02, 0.22, 3, 6);
+    this._bulletGeoTracer.rotateX(Math.PI / 2);
+    this._bulletGeoEnergy = new THREE.CapsuleGeometry(0.04, 0.18, 4, 8);
+    this._bulletGeoEnergy.rotateX(Math.PI / 2);
+    this._tailGeoWide = new THREE.BoxGeometry(0.09, 0.09, 1);
+    this._tailGeoThin = new THREE.BoxGeometry(0.03, 0.03, 1);
+    // Claude 追踪导弹：弹体 / 鼻锥 / 尾翼 / 尾焰，均沿 z 轴（鼻锥朝 +z，尾焰朝 -z）
+    this._missileBodyGeo = new THREE.CylinderGeometry(0.055, 0.062, 0.42, 10);
+    this._missileBodyGeo.rotateX(Math.PI / 2);
+    this._missileNoseGeo = new THREE.ConeGeometry(0.055, 0.2, 10);
+    this._missileNoseGeo.rotateX(Math.PI / 2);
+    this._missileFinGeo = new THREE.BoxGeometry(0.018, 0.17, 0.15);
+    this._missileFlameGeo = new THREE.ConeGeometry(0.05, 0.28, 8);
+    this._missileFlameGeo.rotateX(-Math.PI / 2);
+    this._bulletMatCache = new Map();
     this.enemies = [];
     this.bullets = [];
     this.ebullets = [];
@@ -118,7 +137,7 @@ export class Game {
     this.tokens = 0;
     this.quotaGranted = 0;
     this.subscription = { paidWave: 0, processedWave: 0 };
-    this.protections = Object.fromEntries(PROTECTION_ITEMS.map((it) => [it.id, 0]));
+    this.protections = Object.fromEntries(PROTECTION_ITEMS.map((it) => [it.id, []]));
     this.calls = 0; this.tokensUsed = 0;
     this.result = null;
     this.lastFundsHint = -Infinity;
@@ -768,6 +787,14 @@ export class Game {
     } else {
       this.impactPoint.set(imp.x, imp.y, imp.z);
     }
+    // Claude 追踪导弹：落点标记指向锁定敌人的预测拦截点；准心只指方向，落点不是准心
+    if (this.planId === 'claude') {
+      const lock = this.lockMissileTarget({ pos: muzzle, range: this.loadout.range }, bdir);
+      if (lock) {
+        const lead = this.missileLeadPoint(muzzle, lock, this.loadout.bulletSpeed);
+        this.impactPoint.set(lead.x, groundHeight(lead.x, lead.z), lead.z);
+      }
+    }
     const markGap = Math.hypot(this.impactPoint.x - this.aimPoint.x, this.impactPoint.z - this.aimPoint.z);
     this.impactMarker.visible = markGap > 0.5;
     this.impactMarker.position.set(this.impactPoint.x, groundHeight(this.impactPoint.x, this.impactPoint.z) + 0.03, this.impactPoint.z);
@@ -868,17 +895,45 @@ export class Game {
       // 双管齐下：额外弹从枪口两侧平行射出，不共用同一条射线
       const org = origin.clone();
       if (i >= lo.pellets) org.addScaledVector(side, ((i - lo.pellets) % 2 === 0 ? 1 : -1) * 0.28);
-      const b = { pos: org, vel: d.multiplyScalar(lo.bulletSpeed), life: 1.1, traveled: 0, range: lo.range, dmg,
-        attack, pierce: (lo.intrinsicPierce || 0) + (lo.mods.pierce || 0) };
-      b.vis = this.makeBulletVis(raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : (lo.gun.accent ?? 0xffd080), 1.6);
+      // 导弹寿命覆盖整个射程并留转弯余量，避免低速弹在到达远程目标前提前到期
+      const life = this.planId === 'claude' ? lo.range / lo.bulletSpeed + 0.4 : 1.1;
+      const b = { pos: org, vel: d.multiplyScalar(lo.bulletSpeed), life, traveled: 0, range: lo.range, dmg,
+        attack, pierce: this.planId === 'claude' ? 0 : (lo.intrinsicPierce || 0) + (lo.mods.pierce || 0), planId: this.planId, trailT: 0 };
+      const tailLen = this.planId === 'claude' ? 1.5 : this.planId === 'qwen' ? 2.2 : this.planId === 'gpt' ? 1.8 : this.planId === 'glm' ? 0.9 : 1.0;
+      b.vis = this.makeBulletVis(this.planId, raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : (lo.gun.accent ?? 0xffd080), tailLen);
       b.vis.position.copy(b.pos);
       b.vis.lookAt(b.pos.clone().add(b.vel));
+      if (this.planId === 'claude') b.target = this.lockMissileTarget(b, base);
       this.bullets.push(b);
     }
-    this.fx.flash(origin, 0.22);
-    this.fx.smoke(origin, 1, 0x8a8078, 0.22, 1.6, 0.45);
+    switch (this.planId) {
+      case 'claude':
+        this.fx.flash(origin, 0.55);
+        this.fx.spark(origin, base.clone().multiplyScalar(0.5), 6, 0xffa060, 4);
+        this.fx.smoke(origin, 2, 0x9a8070, 0.3, 1.8, 0.5);
+        this.engine.addShake(0.18);
+        break;
+      case 'gpt':
+        this.fx.flash(origin, 0.35);
+        this.fx.smoke(origin, 1, 0x70a090, 0.22, 1.6, 0.4);
+        this.engine.addShake(0.1);
+        break;
+      case 'qwen':
+        this.fx.flash(origin, 0.18);
+        this.engine.addShake(0.05);
+        break;
+      case 'glm':
+        this.fx.flash(origin, 0.45);
+        this.fx.smoke(origin, 3, 0x7080a0, 0.35, 2.0, 0.55);
+        this.fx.spark(origin, base.clone().multiplyScalar(0.3), 4, 0x60a0ff, 3);
+        this.engine.addShake(0.22);
+        break;
+      default:
+        this.fx.flash(origin, 0.22);
+        this.fx.smoke(origin, 1, 0x8a8078, 0.22, 1.6, 0.45);
+        this.engine.addShake(0.09);
+    }
     this.playerDuck.kick();
-    this.engine.addShake(lo.pellets > 1 ? 0.16 : 0.09);
     this.audio.shoot();
     return true;
   }
@@ -1020,6 +1075,13 @@ export class Game {
   nextWave() {
     if (this.state !== 'playing' || !getPlan(this.planId)) return;
     this.wave++;
+    let expired = 0;
+    for (const it of PROTECTION_ITEMS) {
+      const before = this.protections[it.id].length;
+      this.protections[it.id] = this.protections[it.id].filter((w) => w > this.wave);
+      expired += before - this.protections[it.id].length;
+    }
+    if (expired) this.hud.toast(`${expired} 件保护道具到期销毁`);
     this.renewSubscription(this.wave);
     this.plan = wavePlan(this.wave);
     const q = [];
@@ -1091,14 +1153,68 @@ export class Game {
     if (elite) this.hud.toast(`精英${e.name}来袭！三倍赏金`);
   }
 
-  makeBulletVis(tailColor, tailLen) {
+  makeBulletVis(planId, tailColor, tailLen) {
     const g = new THREE.Group();
-    g.add(new THREE.Mesh(this._bulletGeo, this._bulletMat));
-    const tail = new THREE.Mesh(this._tailGeo, new THREE.MeshBasicMaterial({
-      color: tailColor, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-    tail.scale.z = tailLen;
-    tail.position.z = -tailLen / 2 - 0.1;
-    g.add(tail);
+    // 材质按配置缓存共享：几何体本就共享，避免每发子弹新建材质造成分配与未 dispose 累积
+    const cached = (key, make) => {
+      let m = this._bulletMatCache.get(key);
+      if (!m) { m = make(); this._bulletMatCache.set(key, m); }
+      return m;
+    };
+    const addTail = (geo, color, len, opacity = 0.5) => {
+      const t = new THREE.Mesh(geo, cached(`tail:${color}:${opacity}`, () => new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false })));
+      t.scale.z = len; t.position.z = -len / 2 - 0.1; g.add(t);
+    };
+    switch (planId) {
+      case 'claude': {
+        const body = new THREE.Mesh(this._missileBodyGeo, cached('body:claude', () => new THREE.MeshStandardMaterial({
+          color: 0xefe6d8, roughness: 0.3, metalness: 0.75, emissive: 0x2a1a10, emissiveIntensity: 0.4 })));
+        g.add(body);
+        const nose = new THREE.Mesh(this._missileNoseGeo, cached('nose:claude', () => new THREE.MeshStandardMaterial({
+          color: 0xd97757, roughness: 0.35, metalness: 0.6, emissive: 0xd97757, emissiveIntensity: 0.5 })));
+        nose.position.z = 0.31; g.add(nose);
+        const finMat = cached('fin:claude', () => new THREE.MeshStandardMaterial({ color: 0x9a5a42, roughness: 0.5, metalness: 0.5 }));
+        for (let k = 0; k < 4; k++) {
+          const a = Math.PI / 4 + k * Math.PI / 2;
+          const fin = new THREE.Mesh(this._missileFinGeo, finMat);
+          fin.position.set(Math.cos(a) * 0.07, Math.sin(a) * 0.07, -0.17);
+          fin.rotation.z = a; g.add(fin);
+        }
+        const flame = new THREE.Mesh(this._missileFlameGeo, cached('flame:claude', () => new THREE.MeshBasicMaterial({
+          color: 0xffb060, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })));
+        flame.position.z = -0.35; g.add(flame);
+        g.userData.flame = flame; // 供 updateBullets 做尾焰抖动
+        addTail(this._tailGeoWide, tailColor, tailLen, 0.5);
+        break;
+      }
+      case 'gpt': {
+        const core = new THREE.Mesh(this._bulletGeoEnergy, cached('core:gpt', () => new THREE.MeshStandardMaterial({
+          color: 0xc0ffd8, roughness: 0.25, metalness: 0.8, emissive: 0x10a37f, emissiveIntensity: 0.9 })));
+        g.add(core);
+        addTail(this._tailGeo, tailColor, tailLen, 0.6);
+        break;
+      }
+      case 'qwen': {
+        const core = new THREE.Mesh(this._bulletGeoTracer, cached('core:qwen', () => new THREE.MeshBasicMaterial({
+          color: 0xc8b0ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })));
+        g.add(core);
+        addTail(this._tailGeoThin, tailColor, tailLen, 0.65);
+        break;
+      }
+      case 'glm': {
+        const core = new THREE.Mesh(this._bulletGeoOrb, cached('core:glm', () => new THREE.MeshStandardMaterial({
+          color: 0xcfe0ff, roughness: 0.3, metalness: 0.7, emissive: 0x3b82f6, emissiveIntensity: 0.9 })));
+        g.add(core);
+        addTail(this._tailGeoWide, tailColor, tailLen * 0.5, 0.55);
+        break;
+      }
+      default: {
+        g.add(new THREE.Mesh(this._bulletGeo, this._bulletMat));
+        addTail(this._tailGeo, tailColor, tailLen, 0.4);
+        break;
+      }
+    }
     this.engine.scene.add(g);
     return g;
   }
@@ -1542,6 +1658,98 @@ export class Game {
 
   /* ---------------- 子弹 ---------------- */
 
+  // 发射时按枪口指向锁定一个敌人：角度最贴合者优先，距离仅作同级 tie-break；范围内无敌人则不锁定（直线飞行）
+  lockMissileTarget(b, dir) {
+    let best = null, bestScore = Infinity;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const dx = e.pos.x - b.pos.x, dz = e.pos.z - b.pos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > b.range || dist < 1e-3) continue;
+      const dot = (dx * dir.x + dz * dir.z) / dist;
+      const angle = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
+      const score = angle * 1000 + dist;
+      if (score < bestScore) { bestScore = score; best = e; }
+    }
+    return best;
+  }
+
+  // 预测拦截点：按敌人当前速度估算提前量（迭代两次收敛），瞄准它将到达的位置而非当前位置
+  missileLeadPoint(pos, e, speed) {
+    const bx = e.pos.x, by = e.pos.y + 0.8 * e.scale, bz = e.pos.z;
+    let t = Math.min(Math.hypot(bx - pos.x, by - pos.y, bz - pos.z) / speed, 2);
+    for (let i = 0; i < 2; i++) {
+      const px = bx + e.vel.x * t, pz = bz + e.vel.z * t;
+      t = Math.min(Math.hypot(px - pos.x, by - pos.y, pz - pos.z) / speed, 2);
+    }
+    return new THREE.Vector3(bx + e.vel.x * t, by, bz + e.vel.z * t);
+  }
+
+  // 沿 dir 步进探测障碍物，返回首次被挡前的净空距离（无障碍返回 maxDist）
+  missileClearance(pos, dir, maxDist) {
+    const step = 0.4, n = Math.ceil(maxDist / step);
+    for (let i = 1; i <= n; i++) {
+      const d = i * step;
+      if (pointBlocked(pos.x + dir.x * d, pos.z + dir.z * d, this.world.colliders)) return d - step;
+    }
+    return maxDist;
+  }
+
+  // 避障：前方或通往目标的直线被挡时，扫描一大片候选方向选净空最长的一侧绕行，
+  // 并记住已选侧避免左右抖动；宁可绕大圈也要绕过障碍，而非直直撞上去引爆。
+  missileAvoid(pos, cur, desired, speed, b) {
+    const look = 9;
+    const aheadClear = this.missileClearance(pos, cur, look);
+    const directClear = this.missileClearance(pos, desired, look);
+    if (aheadClear >= look && directClear >= look) return { dir: desired, urgency: 0 };
+    const side = new THREE.Vector3(cur.z, 0, -cur.x);
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    const angles = [0.35, 0.7, 1.05, 1.4];
+    let best = desired, bestScore = -Infinity, bestSign = 0;
+    for (const sign of [1, -1]) {
+      for (const ang of angles) {
+        const dir = cur.clone().multiplyScalar(Math.cos(ang)).addScaledVector(side, sign * Math.sin(ang)).normalize();
+        let score = this.missileClearance(pos, dir, look) * 2 + dir.dot(desired) * 1.2;
+        if (b && b._avoidSign === sign) score += 1.5; // 保持已选绕行侧
+        if (score > bestScore) { bestScore = score; best = dir; bestSign = sign; }
+      }
+    }
+    if (b) b._avoidSign = bestSign;
+    const urgency = 1 - Math.min(aheadClear, directClear) / look;
+    const dir = desired.clone().multiplyScalar((1 - urgency) * 0.35).addScaledVector(best, 0.65 + urgency * 0.9).normalize();
+    return { dir, urgency };
+  }
+
+  // 追踪转向：只对发射时锁定的目标生效；未锁定或目标死亡则直线飞行。瞄准预测拦截点并自动避障
+  steerMissile(b, dt) {
+    const e = b.target;
+    if (!e) return; // 未锁定敌人 → 直线飞行
+    if (e.dead) { b.target = null; return; } // 锁定目标死亡 → 解除锁定，转为直线
+    const speed = b.vel.length();
+    if (speed < 1e-3) return;
+    const cur = b.vel.clone().divideScalar(speed);
+    const desired = this.missileLeadPoint(b.pos, e, speed).sub(b.pos);
+    if (desired.lengthSq() < 1e-6) return;
+    desired.normalize();
+    const { dir: guided, urgency } = this.missileAvoid(b.pos, cur, desired, speed, b);
+    const angle = cur.angleTo(guided);
+    if (angle < 1e-4) return;
+    const rate = MISSILE_TURN_RATE + urgency * 20; // 追踪时柔和弧线；避障时允许更急转弯以绕过障碍
+    const t = Math.min(1, (rate * dt) / angle);
+    const q = new THREE.Quaternion().slerp(new THREE.Quaternion().setFromUnitVectors(cur, guided), t);
+    b.vel.copy(cur.applyQuaternion(q).multiplyScalar(speed));
+  }
+
+  // 导弹引爆：火球闪光 + 冲击波环 + 四散火星 + 烟团 + 爆炸音 + 震屏
+  missileExplode(pos) {
+    this.fx.flash(pos, 1.2);
+    this.fx.ring(pos, 0xff7040, 2.8);
+    this.fx.spark(pos, new THREE.Vector3(0, 0.8, 0), 26, 0xffa050, 12);
+    this.fx.smoke(pos, 5, 0x6a5a4a, 0.6, 2.4, 0.9);
+    this.audio.boom();
+    this.engine.addShake(0.3);
+  }
+
   updateBullets(dt) {
     if (this.state !== 'playing') return;
     const p = this.p;
@@ -1550,6 +1758,7 @@ export class Game {
       b.life -= dt;
       let gone = b.life <= 0;
       if (!gone) {
+        if (b.planId === 'claude') this.steerMissile(b, dt);
         const step = b.vel.clone().multiplyScalar(dt);
         const n = Math.min(12, Math.max(1, Math.ceil(step.length() / 0.3)));
         step.divideScalar(n);
@@ -1561,9 +1770,31 @@ export class Game {
             const r = e.radius + 0.22;
             if (Math.hypot(b.pos.x - e.pos.x, b.pos.z - e.pos.z) < r && b.pos.y < 1.7 * e.scale) {
               const dmg = damageAtDistance(b.dmg, b.traveled, b.attack);
-              if (!b.countedHit) { this.hits++; b.countedHit = true; } // 穿透多名目标仍只算这一弹命中
-              this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.4), 7, 0xffd080, 6);
-              this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 4, 2);
+              if (!b.countedHit) { this.hits++; b.countedHit = true; }
+              const hitDir = b.vel.clone().normalize().multiplyScalar(-0.4);
+              switch (b.planId) {
+                case 'claude':
+                  this.missileExplode(b.pos);
+                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 7, 3);
+                  break;
+                case 'gpt':
+                  this.fx.spark(b.pos, hitDir, 9, 0x40e8a0, 7);
+                  this.fx.ring(b.pos, 0x30d890, 1.2);
+                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 5, 2.5);
+                  break;
+                case 'qwen':
+                  this.fx.spark(b.pos, hitDir, 5, 0xb090ff, 8);
+                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 3, 2);
+                  break;
+                case 'glm':
+                  this.fx.spark(b.pos, hitDir, 10, 0x70b0ff, 5);
+                  this.fx.smoke(b.pos, 1, 0x607090, 0.3, 1.4, 0.35);
+                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 5, 2.5);
+                  break;
+                default:
+                  this.fx.spark(b.pos, hitDir, 7, 0xffd080, 6);
+                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 4, 2);
+              }
               this.audio.hit();
               this.hud.hitmarker(false);
               e.duck.kick();
@@ -1582,8 +1813,11 @@ export class Game {
             }
           }
           if (!gone && b.pos.y < 1.8 && pointBlocked(b.pos.x, b.pos.z, this.world.colliders)) {
-            this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.5), 6, 0xffc060, 5);
-            this.fx.smoke(b.pos, 1, 0x8a8078, 0.25, 1.4, 0.4);
+            if (b.planId === 'claude') this.missileExplode(b.pos);
+            else {
+              this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.5), 6, 0xffc060, 5);
+              this.fx.smoke(b.pos, 1, 0x8a8078, 0.25, 1.4, 0.4);
+            }
             gone = true;
           }
           if (!gone) {
@@ -1594,9 +1828,12 @@ export class Game {
               this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 5, 0xbfe8e0, 3);
               gone = true;
             } else if (b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
-              this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
-              this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, 0xc8b080, 3);
-              this.fx.decal(b.pos, 0.28);
+              if (b.planId === 'claude') { this.missileExplode(b.pos); this.fx.decal(b.pos, 0.4); }
+              else {
+                this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
+                this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, 0xc8b080, 3);
+                this.fx.decal(b.pos, 0.28);
+              }
               gone = true;
             }
           }
@@ -1613,6 +1850,19 @@ export class Game {
         this.bullets.splice(i, 1);
       } else if (b.vis) {
         b.vis.position.copy(b.pos);
+        if (b.planId === 'claude') {
+          b.vis.lookAt(b.pos.clone().add(b.vel));
+          const flame = b.vis.userData.flame;
+          if (flame) { const f = 0.75 + Math.random() * 0.5; flame.scale.set(f, f, 0.7 + Math.random() * 0.7); }
+        }
+        b.trailT = (b.trailT || 0) + dt;
+        if (b.planId === 'claude' && b.trailT > 0.03) {
+          b.trailT = 0;
+          this.fx.spark(b.pos, new THREE.Vector3((Math.random() - 0.5) * 0.3, 0.2, (Math.random() - 0.5) * 0.3), 2, 0xff8050, 2);
+        } else if (b.planId === 'gpt' && b.trailT > 0.06) {
+          b.trailT = 0;
+          this.fx.spark(b.pos, new THREE.Vector3(0, 0.1, 0), 1, 0x40e8a0, 1.5);
+        }
       }
     }
 
@@ -1653,7 +1903,7 @@ export class Game {
         this.ebullets.splice(i, 1);
       } else {
         if (!b.spr) {
-          b.spr = this.makeBulletVis(0xff7040, 0.7);
+          b.spr = this.makeBulletVis(null, 0xff7040, 0.7);
           b.spr.lookAt(b.pos.clone().add(b.vel));
         }
         b.spr.position.copy(b.pos);
@@ -1704,8 +1954,8 @@ export class Game {
           this.hud.toast(`拾取 ${loot.label} · +${loot.coins} 金币${eff ? ' · ' + eff : ''}`);
           this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${loot.label} +${loot.coins}`, '#ffe28a');
         } else if (protection) {
-          this.protections[protection.id] = Math.min(Number.MAX_SAFE_INTEGER, this.protections[protection.id] + 1);
-          this.hud.toast(`拾取【${protection.label}】×${this.protections[protection.id]} · 虚构风险叠加降低，最低保留基础概率的 5%`);
+          this.protections[protection.id].push(this.wave + PROTECTION_DURATION);
+          this.hud.toast(`拾取【${protection.label}】×${this.protections[protection.id].length} · 持续 ${PROTECTION_DURATION} 波后销毁`);
           this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${protection.label} +1`, '#c4a1ff');
         } else if (pk.kind === 'health') {
           p.hp = Math.min(p.maxHp, p.hp + 35);

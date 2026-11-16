@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HUD } from '../src/hud.js';
+import { PROTECTION_DURATION } from '../src/subscriptions.js';
 
 // 只模拟 screen() 所需的可见性/焦点 API；原生按键激活另由浏览器回归验证。
 function screenHarness() {
@@ -84,5 +85,55 @@ describe('结算层只在进入时自动聚焦', () => {
     hud.screen('start'); expect(doc.activeElement).toBe(start);
     hud.screen('pause'); expect(doc.activeElement).toBe(resume);
     hud.screen(null); expect(doc.activeElement).toBe(doc.body);
+  });
+});
+
+function protectionHarness() {
+  const makeEl = (tag) => {
+    const classes = new Set();
+    const el = {
+      tag, children: [], className: '', title: '', textContent: '', dataset: {},
+      style: { setProperty: vi.fn() },
+      classList: {
+        contains: (name) => classes.has(name),
+        toggle: (name, on) => { if (on) classes.add(name); else classes.delete(name); return on; },
+      },
+      setAttribute: vi.fn(),
+      appendChild: (child) => { el.children.push(child); return child; },
+      append: (...kids) => { el.children.push(...kids); },
+    };
+    return el;
+  };
+  vi.stubGlobal('document', { createElement: makeEl });
+  const hud = Object.create(HUD.prototype);
+  hud._protectionRefs = new Map();
+  return { hud, container: makeEl('div') };
+}
+
+describe('保护芯片提示持续与剩余波次', () => {
+  const chipOf = (container, id) => container.children.find((c) => c.dataset.protection === id);
+
+  it('title 用持续常量，并按最近到期批次展示剩余波次', () => {
+    const { hud, container } = protectionHarness();
+    hud.renderProtections(container, { us_phone: [6, 9] }, 1);
+    const chip = chipOf(container, 'us_phone');
+    expect(chip.title).toContain(`持续 ${PROTECTION_DURATION} 波后销毁`);
+    expect(chip.title).toContain('最近一批剩余 5 波');
+    expect(chip.children.at(-1).textContent).toBe('×2');
+    expect(chip.classList.contains('held')).toBe(true);
+    hud.renderProtections(container, { us_phone: [6, 9] }, 4);
+    expect(chip.title).toContain('最近一批剩余 2 波');
+  });
+
+  it('未持有、旧数值格式或缺少波次时回退基础提示', () => {
+    const { hud, container } = protectionHarness();
+    hud.renderProtections(container, { us_phone: 3 });
+    const chip = chipOf(container, 'us_phone');
+    expect(chip.title).not.toContain('剩余');
+    expect(chip.children.at(-1).textContent).toBe('×0');
+    expect(chip.classList.contains('held')).toBe(false);
+    hud.renderProtections(container, { us_phone: [9] });
+    expect(chip.title).not.toContain('剩余');
+    expect(chip.children.at(-1).textContent).toBe('×1');
   });
 });
