@@ -100,7 +100,16 @@ export class HUD {
     this._hitT = null;
     this._dmgT = null;
     this._protectionRefs = new Map();
+    this._cache = {};
     this.cross = { x: innerWidth / 2, y: innerHeight / 2 };
+    if (this.el.crosshair) {
+      this._crossParts = {
+        t: this.el.crosshair.querySelector('.t'),
+        b: this.el.crosshair.querySelector('.b'),
+        l: this.el.crosshair.querySelector('.l'),
+        r: this.el.crosshair.querySelector('.r'),
+      };
+    }
   }
 
   loadingDone() { this.el.loading.classList.add('hidden'); }
@@ -108,28 +117,52 @@ export class HUD {
 
   hp(v, max) {
     const pct = Math.max(0, v / max) * 100;
-    this.el.hpFill.style.width = pct + '%';
-    this.el.hpFill.classList.toggle('low', pct < 35);
-    this.el.hpText.textContent = Math.ceil(Math.max(0, v));
-    this.el.low.classList.toggle('on', pct < 35 && pct > 0);
+    const width = pct + '%';
+    const low = pct < 35;
+    const lowOn = low && pct > 0;
+    const text = String(Math.ceil(Math.max(0, v)));
+    const c = this._cache || (this._cache = {});
+    if (c.hpW !== width) { c.hpW = width; this.el.hpFill.style.width = width; }
+    if (c.hpLow !== low) { c.hpLow = low; this.el.hpFill.classList.toggle('low', low); }
+    if (c.hpTxt !== text) { c.hpTxt = text; this.el.hpText.textContent = text; }
+    if (c.lowOn !== lowOn) { c.lowOn = lowOn; this.el.low.classList.toggle('on', lowOn); }
   }
 
-  dash(t) { this.el.dashFill.style.width = Math.min(1, Math.max(0, t)) * 100 + '%'; }
+  dash(t) {
+    const width = Math.min(1, Math.max(0, t)) * 100 + '%';
+    const c = this._cache || (this._cache = {});
+    if (c.dashW !== width) { c.dashW = width; this.el.dashFill.style.width = width; }
+  }
 
   subscription(game) {
+    const c = this._cache || (this._cache = {});
     const plan = getPlan(game.planId);
     const quote = game.usageQuote();
     const metered = !!plan && (game.subscriptionStatus === 'metered' || game.tokens === 0);
-    this.el.tokensRemaining.textContent = count(game.tokens);
-    this.el.tokensGranted.textContent = count(game.quotaGranted);
-    this.el.subscriptionStatus.textContent = !plan ? '等待选择' : game.subscriptionStatus === 'metered'
+    if (c.tokRem !== game.tokens) {
+      c.tokRem = game.tokens;
+      this.el.tokensRemaining.textContent = count(game.tokens);
+    }
+    if (c.tokGrant !== game.quotaGranted) {
+      c.tokGrant = game.quotaGranted;
+      this.el.tokensGranted.textContent = count(game.quotaGranted);
+    }
+    const statusText = !plan ? '等待选择' : game.subscriptionStatus === 'metered'
       ? '未续费 · 按量' : metered ? '额度用尽 · 按量' : '额度优先';
-    this.el.subscriptionStatus.dataset.status = !plan ? 'none' : metered ? 'metered' : 'active';
-    this.el.tokensRemaining.classList.toggle('empty', !!plan && game.tokens === 0);
-    this.el.usageHint.classList.toggle('blocked', !!quote && quote.costMicros > game.walletMicros);
-    this.el.usageHint.textContent = !quote ? '选择订阅后开始 · 主动技能不耗 Token' : quote.costMicros > game.walletMicros
-      ? `余额不足一次调用 · ${count(quote.tokens)} Token / 次；移动、技能和拾取仍可用`
-      : `${count(quote.tokens)} Token / 次 · ${quote.costMicros ? `下次 ${formatCoins(microsToCoins(quote.costMicros))} 刀${quote.includedTokens ? '（部分按量）' : '（按量）'}` : '消耗本波额度'}`;
+    const statusCode = !plan ? 'none' : metered ? 'metered' : 'active';
+    if (c.subText !== statusText) { c.subText = statusText; this.el.subscriptionStatus.textContent = statusText; }
+    if (c.subCode !== statusCode) { c.subCode = statusCode; this.el.subscriptionStatus.dataset.status = statusCode; }
+    const empty = !!plan && game.tokens === 0;
+    if (c.tokEmpty !== empty) { c.tokEmpty = empty; this.el.tokensRemaining.classList.toggle('empty', empty); }
+    const blocked = !!quote && quote.costMicros > game.walletMicros;
+    if (c.hintBlocked !== blocked) { c.hintBlocked = blocked; this.el.usageHint.classList.toggle('blocked', blocked); }
+    const hintKey = !quote ? 'none' : `${blocked ? 1 : 0}:${quote.tokens}:${quote.costMicros}:${quote.includedTokens}`;
+    if (c.hintKey !== hintKey) {
+      c.hintKey = hintKey;
+      this.el.usageHint.textContent = !quote ? '选择订阅后开始 · 主动技能不耗 Token' : blocked
+        ? `余额不足一次调用 · ${count(quote.tokens)} Token / 次；移动、技能和拾取仍可用`
+        : `${count(quote.tokens)} Token / 次 · ${quote.costMicros ? `下次 ${formatCoins(microsToCoins(quote.costMicros))} 刀${quote.includedTokens ? '（部分按量）' : '（按量）'}` : '消耗本波额度'}`;
+    }
     this.renderProtections(this.el.protectionCounts, game.protections, game.wave);
   }
 
@@ -170,16 +203,31 @@ export class HUD {
   }
 
   stats(wave, kills, score, time) {
-    this.el.statWave.textContent = wave;
-    this.el.statKills.textContent = kills;
-    this.el.statScore.textContent = score;
-    const m = Math.floor(time / 60), s = Math.floor(time % 60);
-    this.el.statTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    const c = this._cache || (this._cache = {});
+    if (c.wave !== wave) { c.wave = wave; this.el.statWave.textContent = wave; }
+    if (c.kills !== kills) { c.kills = kills; this.el.statKills.textContent = kills; }
+    if (c.score !== score) { c.score = score; this.el.statScore.textContent = score; }
+    const sec = Math.floor(time);
+    if (c.sec !== sec) {
+      c.sec = sec;
+      const m = Math.floor(sec / 60), s = sec % 60;
+      this.el.statTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    }
   }
 
-  coins(v) { this.el.statCoins.textContent = statCoinFormat.format(Number(v)); }
+  coins(v) {
+    const c = this._cache || (this._cache = {});
+    const num = Number(v);
+    if (c.coins !== num) {
+      c.coins = num;
+      this.el.statCoins.textContent = statCoinFormat.format(num);
+    }
+  }
 
-  remain(v) { this.el.statRemain.textContent = v; }
+  remain(v) {
+    const c = this._cache || (this._cache = {});
+    if (c.remain !== v) { c.remain = v; this.el.statRemain.textContent = v; }
+  }
 
   threat(x, y) {
     const ang = Math.atan2(y - innerHeight / 2, x - innerWidth / 2);
@@ -205,9 +253,15 @@ export class HUD {
   }
 
   growth(level, xp, xpNeed, cardCount) {
-    this.el.levelBadge.textContent = 'Lv.' + level;
-    this.el.xpFill.style.width = Math.min(1, xp / xpNeed) * 100 + '%';
-    this.el.xpText.textContent = `${Math.floor(xp)} / ${xpNeed}`;
+    const c = this._cache || (this._cache = {});
+    if (c.level !== level) { c.level = level; this.el.levelBadge.textContent = 'Lv.' + level; }
+    const xpW = Math.min(1, xp / xpNeed) * 100 + '%';
+    if (c.xpW !== xpW) { c.xpW = xpW; this.el.xpFill.style.width = xpW; }
+    const xpFloor = Math.floor(xp);
+    if (c.xpFloor !== xpFloor || c.xpNeed !== xpNeed) {
+      c.xpFloor = xpFloor; c.xpNeed = xpNeed;
+      this.el.xpText.textContent = `${xpFloor} / ${xpNeed}`;
+    }
     if (this._cardCount !== cardCount) {
       this._cardCount = cardCount;
       this.el.cardChip.textContent = cardCount;
@@ -232,9 +286,11 @@ export class HUD {
   }
 
   shield(v, max, t) {
+    const c = this._cache || (this._cache = {});
     const on = t > 0 && v > 0;
-    this.el.shieldBar.classList.toggle('on', on);
-    this.el.shieldFill.style.width = (on ? Math.min(1, v / max) * 100 : 0) + '%';
+    const width = (on ? Math.min(1, v / max) * 100 : 0) + '%';
+    if (c.shOn !== on) { c.shOn = on; this.el.shieldBar.classList.toggle('on', on); }
+    if (c.shW !== width) { c.shW = width; this.el.shieldFill.style.width = width; }
   }
 
   /* ---------------- 波次三选一强化卡 ---------------- */
@@ -578,13 +634,23 @@ export class HUD {
   crosshair(x, y, spreadPx, visible) {
     this.cross.x = x; this.cross.y = y;
     const c = this.el.crosshair;
-    c.style.display = visible ? 'block' : 'none';
+    const cache = this._cache || (this._cache = {});
+    const disp = visible ? 'block' : 'none';
+    if (cache.chDisp !== disp) { cache.chDisp = disp; c.style.display = disp; }
+    if (!visible) return;
     c.style.transform = `translate(${x}px, ${y}px)`;
     const g = spreadPx;
-    c.querySelector('.t').style.transform = `translateY(${-g - 9}px)`;
-    c.querySelector('.b').style.transform = `translateY(${g}px)`;
-    c.querySelector('.l').style.transform = `translateX(${-g - 9}px)`;
-    c.querySelector('.r').style.transform = `translateX(${g}px)`;
+    if (cache.chGap !== g) {
+      cache.chGap = g;
+      const parts = this._crossParts || {
+        t: c.querySelector('.t'), b: c.querySelector('.b'),
+        l: c.querySelector('.l'), r: c.querySelector('.r'),
+      };
+      parts.t.style.transform = `translateY(${-g - 9}px)`;
+      parts.b.style.transform = `translateY(${g}px)`;
+      parts.l.style.transform = `translateX(${-g - 9}px)`;
+      parts.r.style.transform = `translateX(${g}px)`;
+    }
   }
 
   damage() {

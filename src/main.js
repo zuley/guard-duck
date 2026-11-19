@@ -27,6 +27,7 @@ document.querySelectorAll('.qualityRow button').forEach((b) => {
     document.querySelectorAll('.qualityRow button').forEach((x) => x.classList.remove('sel'));
     b.classList.add('sel');
     engine.setQuality(b.dataset.q);
+    world.setQuality(engine.software ? 'medium' : b.dataset.q);
     audio.uiClick();
   });
 });

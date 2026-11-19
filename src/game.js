@@ -8,20 +8,31 @@ import { PLANS, STARTING_COINS, getPlan, coinsToMicros, microsToCoins, quoteSubs
 import { ARENA, GATES, GATE_LANE_HALF, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
 import { bubbleTexture, textTexture } from './textures.js';
 import { makePickupVisual } from './pickups.js';
+import {
+  QWEN_BLADE_HALF_WIDTH, QWEN_BLADE_HEIGHT_PAD, QWEN_BLADE_DEPTH_SCALE,
+  bladeTouchesEnemy, segBlocked, pointBlocked, blockerTime,
+} from './collision.js';
+import { menuFocusables, menuNavigate, pollGamepad, botControl } from './gamepad.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
-const GAMEPAD_SKILLS = [[12, 1], [15, 2], [13, 3], [14, 4]];
 // 转向角速度与弹速匹配，避免提速后明显增大转弯半径
 const MISSILE_TURN_RATE = 24;
 const MISSILE_BLAST_RADIUS = 5;
 const MISSILE_FIRE_LIFETIME = LAST_EMBER_LANDING + 4;
 
 const BUBBLE_RADIUS = 0.34;
-const QWEN_BLADE_HALF_WIDTH = 1.25;
-const QWEN_BLADE_HEIGHT_PAD = 0.26;
-const QWEN_BLADE_DEPTH_SCALE = 2.7;
-const QWEN_BLADE_FRONT_DEPTH = (0.57 - 0.14) * 0.5 * QWEN_BLADE_DEPTH_SCALE;
 const DS_TRACER_LENGTH = 1.3;
+
+// 模块级复用向量/四元数，消除 60 FPS 热路径每帧数千次临时对象分配与 GC 抖动
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
+const _v5 = new THREE.Vector3();
+const _ndc = new THREE.Vector2();
+const _up = new THREE.Vector3(0, 1, 0);
+const _q1 = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
 
 function qwenBladeGeometry(innerDepth) {
   const shape = new THREE.Shape();
@@ -32,78 +43,12 @@ function qwenBladeGeometry(innerDepth) {
   return new THREE.ShapeGeometry(shape, 20).scale(1, QWEN_BLADE_DEPTH_SCALE, 1).rotateX(Math.PI / 2);
 }
 
-function bladeTouchesEnemy(pos, stride, direction, enemy) {
-  const dx = pos.x - enemy.pos.x, dz = pos.z - enemy.pos.z;
-  const depth = enemy.radius + QWEN_BLADE_FRONT_DEPTH;
-  const width = enemy.radius + QWEN_BLADE_HALF_WIDTH;
-  const along = (dx * direction.x + dz * direction.z) / depth;
-  const across = (dx * direction.z - dz * direction.x) / width;
-  return segmentTouchesCircle(along, across, stride / depth, 0, 0, 0, 1);
-}
-
 // 头顶名字精灵：贴图由 textTexture 内部统一缓存（32px 小栅格），此处不再自建缓存
 function makeNameSprite(text, color = '#ffffff', height = 0.3) {
   const tex = textTexture(text, color, 32);
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   s.scale.set(height * (tex.image.width / tex.image.height), height, 1);
   return s;
-}
-
-function segBlocked(a, b, colliders) {
-  const steps = 10;
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const x = a.x + (b.x - a.x) * t;
-    const z = a.z + (b.z - a.z) * t;
-    for (const c of colliders) {
-      if (c.hx !== undefined) {
-        if (Math.abs(x - c.x) < c.hx && Math.abs(z - c.z) < c.hz) return true;
-      } else if (Math.hypot(x - c.x, z - c.z) < c.r) return true;
-    }
-  }
-  return false;
-}
-
-function pointBlocked(x, z, colliders) {
-  for (const c of colliders) {
-    if (c.hx !== undefined) {
-      if (Math.abs(x - c.x) < c.hx && Math.abs(z - c.z) < c.hz) return true;
-    } else if (Math.hypot(x - c.x, z - c.z) < c.r) return true;
-  }
-  return false;
-}
-
-function blockerTime(x, z, dx, dz, colliders) {
-  let first = Infinity;
-  const lengthSq = dx * dx + dz * dz;
-  for (const c of colliders) {
-    const ox = x - c.x, oz = z - c.z;
-    if (c.hx !== undefined) {
-      if (Math.abs(ox) > c.hx + Math.abs(dx) || Math.abs(oz) > c.hz + Math.abs(dz)) continue;
-      let enter = 0, exit = 1;
-      for (const [offset, delta, halfSize] of [[ox, dx, c.hx], [oz, dz, c.hz]]) {
-        if (delta === 0) {
-          if (Math.abs(offset) > halfSize) { enter = Infinity; break; }
-        } else {
-          const a = (-halfSize - offset) / delta, b = (halfSize - offset) / delta;
-          enter = Math.max(enter, Math.min(a, b));
-          exit = Math.min(exit, Math.max(a, b));
-        }
-      }
-      if (enter <= exit) first = Math.min(first, enter);
-    } else {
-      if (Math.abs(ox) > c.r + Math.abs(dx) || Math.abs(oz) > c.r + Math.abs(dz)) continue;
-      const offsetSq = ox * ox + oz * oz - c.r * c.r;
-      if (offsetSq <= 0) return 0;
-      if (!lengthSq) continue;
-      const along = ox * dx + oz * dz;
-      const disc = along * along - lengthSq * offsetSq;
-      if (disc < 0) continue;
-      const t = (-along - Math.sqrt(disc)) / lengthSq;
-      if (t >= 0 && t <= 1) first = Math.min(first, t);
-    }
-  }
-  return first;
 }
 
 export class Game {
@@ -665,7 +610,8 @@ export class Game {
       this.hud.toast('卷王模式！我卷得够狠，同事就跟不上');
     }
     const lines = SKILL_SHOUTS[sk.id];
-    this.fx.shout(lines[Math.floor(Math.random() * lines.length)], p.pos);
+    const roll = this.rng ? this.rng() : Math.random();
+    this.fx.shout(lines[Math.floor(roll * lines.length)], p.pos);
   }
 
   /* ---------------- 加班炸弹 ---------------- */
@@ -823,7 +769,7 @@ export class Game {
     // 绝不吸附到弹道落点。真实落点由地面琥珀环 + 曳光 + 弹着贴花单独传达。
     let cx, cy;
     if (this.padAim) {
-      const v = this.aimPoint.clone().project(this.engine.camera);
+      const v = _v1.copy(this.aimPoint).project(this.engine.camera);
       cx = (v.x * 0.5 + 0.5) * innerWidth;
       cy = (-v.y * 0.5 + 0.5) * innerHeight;
     } else {
@@ -847,7 +793,7 @@ export class Game {
     const p = this.p;
     if (this.bot) this.botControl();
     const k = this.keys;
-    const dir = new THREE.Vector3(
+    const dir = _v1.set(
       (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0),
       0,
       (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) - (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0));
@@ -884,7 +830,7 @@ export class Game {
     }
     if (this.slowT > 0) { this.slowT = Math.max(0, this.slowT - dt); if (this.slowT <= 0) this.slowFactor = 1; }
     if (k.has('Space') && p.dashCd <= 0) {
-      p.dashDir.copy(dir.lengthSq() > 0 ? dir : new THREE.Vector3(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw)));
+      p.dashDir.copy(dir.lengthSq() > 0 ? dir : _v2.set(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw)));
       p.dashT = 0.22; p.dashCd = 1.1 * (this.loadout.dashCdMul ?? 1); p.iframes = 0.34;
       p.dashHit = null; // 每次冲刺重置撞击名单
       this.audio.dash();
@@ -894,7 +840,7 @@ export class Game {
     }
 
     const sm = this.loadout.speedMul * (p.hasteT > 0 ? 1.25 : 1) * (p.rageT > 0 ? SKILL_TUNING.rageMoveMul : 1);
-    const target = p.dashT > 0 ? p.dashDir.clone().multiplyScalar(13.5 * sm) : dir.clone().multiplyScalar(6.2 * sm);
+    const target = p.dashT > 0 ? _v2.copy(p.dashDir).multiplyScalar(13.5 * sm) : _v2.copy(dir).multiplyScalar(6.2 * sm);
     p.vel.lerp(target, 1 - Math.exp(-dt * (p.dashT > 0 ? 30 : 11)));
     p.pos.addScaledVector(p.vel, dt);
     p.pos.x = Math.max(-ARENA, Math.min(ARENA, p.pos.x));
@@ -911,7 +857,7 @@ export class Game {
         if (e.dead || p.dashHit.has(e)) continue;
         if (Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z) < e.radius + 0.8) {
           p.dashHit.add(e);
-          const away = e.pos.clone().sub(p.pos).setY(0).normalize();
+          const away = _v3.subVectors(e.pos, p.pos).setY(0).normalize();
           e.vel.addScaledVector(away, dashMod.knock);
           this.damageEnemy(e, dashMod.damage, { noProc: true, color: '#b7f0ff' });
           this.fx.spark(e.pos.clone().setY(0.8), away, 8, 0xb7f0ff, 6);
@@ -925,9 +871,8 @@ export class Game {
     if (this.padAim) {
       this.aimPoint.set(p.pos.x + this.padAim.x * 10, 0.7, p.pos.z + this.padAim.z * 10);
     } else {
-      const ndc = new THREE.Vector2(
-        (this.mouse.x / innerWidth) * 2 - 1, -(this.mouse.y / innerHeight) * 2 + 1);
-      this.ray.setFromCamera(ndc, this.engine.camera);
+      _ndc.set((this.mouse.x / innerWidth) * 2 - 1, -(this.mouse.y / innerHeight) * 2 + 1);
+      this.ray.setFromCamera(_ndc, this.engine.camera);
       const ro = this.ray.ray.origin, rd = this.ray.ray.direction;
       let bestT = Infinity;
       for (const e of this.enemies) {
@@ -947,8 +892,8 @@ export class Game {
     p.aimYaw = Math.atan2(this.aimPoint.x - p.pos.x, this.aimPoint.z - p.pos.z);
 
     // 沿准星方向预测弹道停止点，散射武器以扇面中线为准
-    const muzzle = this.playerDuck.muzzleWorld(new THREE.Vector3());
-    const bdir = this.aimPoint.clone().sub(muzzle);
+    const muzzle = this.playerDuck.muzzleWorld(_v3);
+    const bdir = _v4.subVectors(this.aimPoint, muzzle);
     bdir.y = 0;
     if (bdir.lengthSq() < 1e-8) bdir.set(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw));
     bdir.normalize();
@@ -1033,33 +978,7 @@ export class Game {
   }
 
   botControl() {
-    const p = this.p;
-    const k = this.keys;
-    for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) k.delete(c);
-    let nearest = null, nd = 1e9;
-    for (const e of this.enemies) {
-      if (e.dead) continue;
-      const d = e.pos.distanceTo(p.pos);
-      if (d < nd) { nd = d; nearest = e; }
-    }
-    if (!nearest) {
-      this.mouse.down = false;
-      if (Math.sin(this.t * 0.4) > 0) k.add('KeyW'); else k.add('KeyS');
-      if (Math.cos(this.t * 0.3) > 0) k.add('KeyD'); else k.add('KeyA');
-      return;
-    }
-    const lead = nearest.vel.clone().multiplyScalar(Math.min(0.45, nd / 70));
-    const v = nearest.pos.clone().add(lead).setY(0).project(this.engine.camera);
-    this.mouse.x = (v.x * 0.5 + 0.5) * innerWidth;
-    this.mouse.y = (-v.y * 0.5 + 0.5) * innerHeight;
-    this.mouse.down = true;
-    const dir = nearest.pos.clone().sub(p.pos).setY(0).normalize();
-    const move = nd > 9 ? dir : nd < 5 ? dir.clone().negate() : new THREE.Vector3(-dir.z, 0, dir.x);
-    move.x -= p.pos.x / 22; move.z -= p.pos.z / 22;
-    if (move.lengthSq() > 1e-6) move.normalize();
-    if (move.x > 0.35) k.add('KeyD'); else if (move.x < -0.35) k.add('KeyA');
-    if (move.z > 0.35) k.add('KeyS'); else if (move.z < -0.35) k.add('KeyW');
-    if (nd < 3.2 && p.dashCd <= 0) k.add('Space');
+    botControl(this);
   }
 
   fire() {
@@ -1088,18 +1007,17 @@ export class Game {
     this.shots += lo.pellets + extra;
     const origin = this.playerDuck.muzzleWorld(new THREE.Vector3());
     // 取枪口到准星的水平瞄准方向
-    const base = this.aimPoint.clone().sub(origin);
+    const base = _v1.subVectors(this.aimPoint, origin);
     base.y = 0;
     if (base.lengthSq() < 1e-8) base.set(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw));
     base.normalize();
     const spread = this.spreadNow();
     const fanWidth = lo.pellets > 1 ? lo.gun.pelletSpread : 0;
     const fanCenter = fanWidth ? (Math.random() - 0.5) * 2 * spread : 0;
-    const up = new THREE.Vector3(0, 1, 0);
     const dmg = lo.damage * (raging ? lo.rage.dmgMul : 1);
     const baseColor = this.planId === 'gpt' ? 0x40e8a0 : this.planId === 'qwen' ? 0x8661fc : lo.gun.accent;
     const color = raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : baseColor;
-    const side = new THREE.Vector3(base.z, 0, -base.x).normalize();
+    const side = _v2.set(base.z, 0, -base.x).normalize();
     const attack = {
       provider: this.planId,
       falloffStart: lo.falloffStart, falloffEnd: lo.falloffEnd, falloffMin: lo.falloffMin,
@@ -1114,7 +1032,7 @@ export class Game {
       const angle = fanWidth && i < lo.pellets
         ? fanCenter + (i / (lo.pellets - 1) - 0.5) * fanWidth
         : (Math.random() - 0.5) * 2 * spread;
-      d.applyAxisAngle(up, angle);
+      d.applyAxisAngle(_up, angle);
       d.normalize();
       // 双管齐下：额外弹从枪口两侧平行射出，不共用同一条射线
       const org = origin.clone();
@@ -1547,109 +1465,9 @@ export class Game {
     this.hud.threat(innerWidth / 2 + ux * k, innerHeight / 2 + uz * k);
   }
 
-  // 菜单手柄导航：方向键/D-pad 移动焦点，A 确认；焦点环复用 :focus 样式
-  menuFocusables() {
-    const sel = {
-      weapons: '#weaponScreen button, #weaponScreen summary, #weaponScreen a[href]',
-      card: '#cardScreen .pickCard',
-      cardbook: '#cardBookClose',
-      paused: '#pauseScreen button, #pauseScreen input',
-      over: '#gameoverScreen button',
-    }[this.state];
-    if (!sel) return [];
-    return [...document.querySelectorAll(sel)].filter((el) => {
-      if (el.disabled || el.closest('.hidden')) return false;
-      const r = el.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
-    });
-  }
-
-  menuNavigate(dx, dy) {
-    const list = this.menuFocusables();
-    if (!list.length) return;
-    const cur = list.indexOf(document.activeElement);
-    if (cur < 0) { list[0].focus(); return; }
-    const cr = list[cur].getBoundingClientRect();
-    const cx = cr.x + cr.width / 2, cy = cr.y + cr.height / 2;
-    let best = null, bestScore = Infinity;
-    for (const el of list) {
-      if (el === list[cur]) continue;
-      const r = el.getBoundingClientRect();
-      const vx = r.x + r.width / 2 - cx, vy = r.y + r.height / 2 - cy;
-      const along = vx * dx + vy * dy;
-      if (along <= 4) continue;
-      const perp = Math.abs(vx * dy - vy * dx);
-      const score = along + perp * 2.5;
-      if (score < bestScore) { bestScore = score; best = el; }
-    }
-    if (best) best.focus();
-  }
-
-  pollGamepad() {
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    const gp = pads && pads[0];
-    if (!gp) { this.padAim = null; this.padFire = false; return; }
-    const prev = this.padPrev;
-    const btn = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
-    const edge = (i) => btn(i) && !prev[i];
-    const dead = (v) => (Math.abs(v) > 0.22 ? v : 0);
-    const lx = dead(gp.axes[0] || 0), ly = dead(gp.axes[1] || 0);
-    const rx = dead(gp.axes[2] || 0), ry = dead(gp.axes[3] || 0);
-
-    if (this.state === 'title' || this.state === 'over') {
-      if (edge(0)) { this.audio.init(); this.start(); }
-    } else if (this.state === 'playing') {
-      // 手柄与键鼠共存：摇杆有输入才接管移动，扳机与鼠标左键并联，互不清零
-      const k = this.keys;
-      if (lx || ly) {
-        for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) k.delete(c);
-        if (lx > 0.35) k.add('KeyD'); else if (lx < -0.35) k.add('KeyA');
-        if (ly > 0.35) k.add('KeyS'); else if (ly < -0.35) k.add('KeyW');
-      }
-      this.padAim = (rx || ry) ? { x: rx, z: ry } : null;
-      this.padFire = btn(7) || btn(6);
-      this.mouse.down = this.mouseFire || this.padFire;
-      if (edge(0)) k.add('Space');
-      // 战斗十字键顺时针对应技能 1–4；菜单分支只导航，沿用同一份按键边沿。
-      for (const [button, skill] of GAMEPAD_SKILLS) {
-        if (edge(button)) this.castSkill(skill);
-      }
-      if (edge(1)) this.openWeapons();
-      if (edge(3)) this.openCardBook();
-      if (edge(9)) this.pause();
-    } else if (this.state === 'weapons' || this.state === 'card' || this.state === 'cardbook' || this.state === 'paused') {
-      // 菜单内：方向导航 + A 确认 + B/Start 返回
-      const now = this.t;
-      const nx = (lx > 0.55 || btn(15)) ? 1 : (lx < -0.55 || btn(14)) ? -1 : 0;
-      const ny = (ly > 0.55 || btn(13)) ? 1 : (ly < -0.55 || btn(12)) ? -1 : 0;
-      if ((nx || ny) && now - (this.padNavT || 0) > 0.24) {
-        this.padNavT = now;
-        const ae = document.activeElement;
-        if (ae && ae.type === 'range' && nx) {
-          // 焦点在音量滑条上：左右直接调音量
-          ae.value = String(Math.min(100, Math.max(0, +ae.value + nx * 5)));
-          ae.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          this.menuNavigate(nx, ny);
-        }
-      }
-      if (edge(0)) {
-        const list = this.menuFocusables();
-        const el = list.includes(document.activeElement) ? document.activeElement : list[0];
-        if (el) {
-          if (el.tagName === 'INPUT') el.focus();
-          else el.click();
-          // 计划订阅后会重绘并恢复焦点，不要把新焦点清掉。
-          if (el.tagName === 'BUTTON' && !el.classList.contains('weaponCard')) el.blur();
-        }
-      }
-      if (this.state === 'weapons' && (edge(1) || edge(9))) this.closeWeapons();
-      else if (this.state === 'cardbook' && (edge(3) || edge(1) || edge(9))) this.closeCardBook();
-      else if (this.state === 'paused' && (edge(9) || edge(1))) this.resume();
-      // 选卡界面必须选一张，B/Start 不能跳过
-    }
-    this.padPrev = gp.buttons.map((b) => b.pressed);
-  }
+  menuFocusables() { return menuFocusables(this); }
+  menuNavigate(dx, dy) { menuNavigate(this, dx, dy); }
+  pollGamepad() { pollGamepad(this); }
 
   /* ---------------- 敌人 ---------------- */
 
@@ -1659,15 +1477,15 @@ export class Game {
     const cam = this.engine.camera;
     const frustum = this._frustum.setFromProjectionMatrix(
       this._projMat.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
-    const visPoint = new THREE.Vector3();
+    const visPoint = _v5;
     for (const e of this.enemies) {
       if (this.state !== 'playing') return;
       if (e.dead) { e.duck.update(dt, { moving: false }); continue; }
       const t = ENEMY_TYPES[e.type];
-      const to = p.pos.clone().sub(e.pos); to.y = 0;
+      const to = _v1.subVectors(p.pos, e.pos); to.y = 0;
       const dist = to.length();
-      const dirN = to.clone().normalize();
-      let want = new THREE.Vector3();
+      const dirN = _v2.copy(to).normalize();
+      const want = _v3.set(0, 0, 0);
       // 燃烧弹：持续伤害，每 0.5s 跳一次数字，避免每帧刷屏
       if (e.burnT > 0) {
         e.burnT -= dt;
@@ -1738,21 +1556,21 @@ export class Game {
         const ideal = t.range * 0.75;
         if (dist > ideal + 1.5) want.copy(dirN).multiplyScalar(speed);
         else if (dist < ideal - 2) want.copy(dirN).multiplyScalar(-speed * 0.7);
-        const strafe = new THREE.Vector3(-dirN.z, 0, dirN.x).multiplyScalar(Math.sin(this.t * 0.8 + e.seed) * speed * 0.65);
+        const strafe = _v4.set(-dirN.z, 0, dirN.x).multiplyScalar(Math.sin(this.t * 0.8 + e.seed) * speed * 0.65);
         want.add(strafe);
         e.fireT -= adt;
         visPoint.copy(e.pos); visPoint.y += 0.8;
         if (e.fireT <= 0 && canEngage(dist, t.range, frustum.containsPoint(visPoint)) && !segBlocked(e.pos, p.pos, this.world.colliders)) {
           e.fireT = t.fireInterval * (0.8 + this.rng() * 0.5);
-          const origin = e.duck.muzzleWorld(new THREE.Vector3());
+          const origin = e.duck.muzzleWorld(_v4);
           const pellets = t.pellets || 1;
           for (let i = 0; i < pellets; i++) {
             const d = p.pos.clone().setY(0.6).sub(origin).normalize();
-            d.applyAxisAngle(new THREE.Vector3(0, 1, 0), (this.rng() - 0.5) * (pellets > 1 ? (t.spread || 0.22) : 0.09));
+            d.applyAxisAngle(_up, (this.rng() - 0.5) * (pellets > 1 ? (t.spread || 0.22) : 0.09));
             d.normalize();
             this.ebullets.push({ pos: origin.clone(), vel: d.multiplyScalar(t.bulletSpeed), life: 3, dmg: e.damage });
           }
-          this.fx.flash(origin, 0.22);
+          this.fx.flash(origin.clone(), 0.22);
           e.duck.kick();
           this.audio.enemyShoot();
         }
@@ -1765,12 +1583,20 @@ export class Game {
         const dx = e.pos.x - o.pos.x, dz = e.pos.z - o.pos.z;
         const d = Math.hypot(dx, dz);
         const min = (e.radius + o.radius) * 1.05;
-        if (d < min && d > 1e-4) want.add(new THREE.Vector3(dx / d, 0, dz / d).multiplyScalar((min - d) * 6));
+        if (d < min && d > 1e-4) {
+          const push = ((min - d) * 6) / d;
+          want.x += dx * push;
+          want.z += dz * push;
+        }
       }
       const pdx = e.pos.x - p.pos.x, pdz = e.pos.z - p.pos.z;
       const pd = Math.hypot(pdx, pdz);
       const pmin = e.radius + 0.5;
-      if (pd < pmin && pd > 1e-4) want.add(new THREE.Vector3(pdx / pd, 0, pdz / pd).multiplyScalar((pmin - pd) * 8));
+      if (pd < pmin && pd > 1e-4) {
+        const push = ((pmin - pd) * 8) / pd;
+        want.x += pdx * push;
+        want.z += pdz * push;
+      }
 
       if (e.rootT > 0) want.set(0, 0, 0);
       e.vel.lerp(want, 1 - Math.exp(-dt * 6));
@@ -2038,12 +1864,12 @@ export class Game {
 
   // 目标被击倒时沿当前航向重新锁定，找不到替补就继续直飞。
   steerMissile(b, dt) {
-    if (b.target?.dead) b.target = this.lockMissileTarget(b, b.vel.clone().setY(0).normalize());
+    if (b.target?.dead) b.target = this.lockMissileTarget(b, _v1.copy(b.vel).setY(0).normalize());
     const e = b.target;
     if (!e) return;
     const speed = b.vel.length();
     if (speed < 1e-3) return;
-    const cur = b.vel.clone().divideScalar(speed);
+    const cur = _v1.copy(b.vel).divideScalar(speed);
     const desired = this.missileLeadPoint(b.pos, e, speed).sub(b.pos);
     if (desired.lengthSq() < 1e-6) return;
     desired.normalize();
@@ -2052,8 +1878,8 @@ export class Game {
     if (angle < 1e-4) return;
     const rate = MISSILE_TURN_RATE + urgency * 20; // 追踪时柔和弧线；避障时允许更急转弯以绕过障碍
     const t = Math.min(1, (rate * dt) / angle);
-    const q = new THREE.Quaternion().slerp(new THREE.Quaternion().setFromUnitVectors(cur, guided), t);
-    b.vel.copy(cur.applyQuaternion(q).multiplyScalar(speed));
+    _q1.identity().slerp(_q2.setFromUnitVectors(cur, guided), t);
+    b.vel.copy(cur.applyQuaternion(_q1).multiplyScalar(speed));
   }
 
   missileExplode(b, directTarget, impactDamage = damageAtDistance(b.dmg, b.traveled, b.attack)) {
@@ -2121,12 +1947,12 @@ export class Game {
       const isBlade = b.planId === 'qwen';
       const sweepRadius = isBubble ? BUBBLE_RADIUS : isBlade ? QWEN_BLADE_HALF_WIDTH : 0;
       const heightPad = isBlade ? QWEN_BLADE_HEIGHT_PAD : sweepRadius;
-      const bladeDirection = isBlade ? b.vel.clone().setY(0).normalize() : null;
+      const bladeDirection = isBlade ? _v2.copy(b.vel).setY(0).normalize() : null;
       b.life -= dt;
       let gone = b.life <= 0;
       if (!gone) {
         if (b.planId === 'claude') this.steerMissile(b, dt);
-        const step = b.vel.clone().multiplyScalar(dt);
+        const step = _v3.copy(b.vel).multiplyScalar(dt);
         if (isBubble) step.clampLength(0, Math.max(0, b.range - b.traveled));
         const n = Math.min(12, Math.max(1, Math.ceil(step.length() / 0.3)));
         step.divideScalar(n);
@@ -2266,7 +2092,7 @@ export class Game {
       b.life -= dt;
       let gone = b.life <= 0;
       if (!gone) {
-        const step = b.vel.clone().multiplyScalar(dt);
+        const step = _v3.copy(b.vel).multiplyScalar(dt);
         const n = Math.min(12, Math.max(1, Math.ceil(step.length() / 0.3)));
         step.divideScalar(n);
         for (let s = 0; s < n && !gone; s++) {

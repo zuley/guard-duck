@@ -65,11 +65,13 @@ class BillboardPool {
     this.grav = new Float32Array(count);
     this.drag = new Float32Array(count);
     this.idx = 0;
+    this.active = 0;
     scene.add(this.mesh);
   }
 
   spawn(x, y, z, vx, vy, vz, { life = 1, size = 0.5, grow = 0, color = 0xffffff, rot = 0, rotV = 0, grav = 0, drag = 0 }) {
     const i = this.idx; this.idx = (this.idx + 1) % this.count;
+    if (this.life[i] <= 0) this.active++;
     this.pos.set([x, y, z], i * 3);
     this.vel.set([vx, vy, vz], i * 3);
     this.life[i] = this.maxLife[i] = life;
@@ -81,10 +83,13 @@ class BillboardPool {
   }
 
   update(dt) {
+    if (this.active === 0) return;
     const m = this.mesh.instanceMatrix.array;
+    let alive = 0;
     for (let i = 0; i < this.count; i++) {
       if (this.life[i] <= 0) { this.aLife.array[i] = 0; continue; }
       this.life[i] -= dt;
+      if (this.life[i] > 0) alive++;
       const i3 = i * 3;
       const dr = Math.exp(-this.drag[i] * dt);
       this.vel[i3] *= dr; this.vel[i3 + 1] = this.vel[i3 + 1] * dr - this.grav[i] * dt; this.vel[i3 + 2] *= dr;
@@ -99,6 +104,7 @@ class BillboardPool {
       m[i * 16 + 13] = this.pos[i3 + 1];
       m[i * 16 + 14] = this.pos[i3 + 2];
     }
+    this.active = alive;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.aLife.needsUpdate = true;
     this.aSize.needsUpdate = true;
@@ -150,6 +156,7 @@ export class FX {
     this.sparkPts.frustumCulled = false;
     scene.add(this.sparkPts);
     this.sparkIdx = 0;
+    this.sparkActive = 0;
 
     // 枪口焰 / 光 / 曳光 / 贴花 / 冲击环 / 数字
     this.flashes = [];
@@ -258,6 +265,7 @@ export class FX {
     const c = new THREE.Color(color);
     for (let k = 0; k < n; k++) {
       const i = this.sparkIdx; this.sparkIdx = (this.sparkIdx + 1) % this.sparkN;
+      if (this.sparkLife[i] <= 0) this.sparkActive++;
       const i3 = i * 3;
       this.sparkPos.set([pos.x, pos.y, pos.z], i3);
       const spread = 0.65;
@@ -430,23 +438,28 @@ export class FX {
       }
     }
 
-    for (let i = 0; i < this.sparkN; i++) {
-      if (this.sparkLife[i] <= 0) continue;
-      this.sparkLife[i] -= dt;
-      const i3 = i * 3;
-      this.sparkVel[i3 + 1] -= 12 * dt;
-      this.sparkPos[i3] += this.sparkVel[i3] * dt;
-      this.sparkPos[i3 + 1] += this.sparkVel[i3 + 1] * dt;
-      this.sparkPos[i3 + 2] += this.sparkVel[i3 + 2] * dt;
-      const gh = groundHeight(this.sparkPos[i3], this.sparkPos[i3 + 2]);
-      if (this.sparkPos[i3 + 1] < gh) { this.sparkPos[i3 + 1] = gh; this.sparkVel[i3 + 1] *= -0.3; }
-      this.sparkLife[i] = Math.max(0, this.sparkLife[i]);
+    if (this.sparkActive > 0) {
+      let alive = 0;
+      for (let i = 0; i < this.sparkN; i++) {
+        if (this.sparkLife[i] <= 0) continue;
+        this.sparkLife[i] -= dt;
+        const i3 = i * 3;
+        this.sparkVel[i3 + 1] -= 12 * dt;
+        this.sparkPos[i3] += this.sparkVel[i3] * dt;
+        this.sparkPos[i3 + 1] += this.sparkVel[i3 + 1] * dt;
+        this.sparkPos[i3 + 2] += this.sparkVel[i3 + 2] * dt;
+        const gh = groundHeight(this.sparkPos[i3], this.sparkPos[i3 + 2]);
+        if (this.sparkPos[i3 + 1] < gh) { this.sparkPos[i3 + 1] = gh; this.sparkVel[i3 + 1] *= -0.3; }
+        this.sparkLife[i] = Math.max(0, this.sparkLife[i]);
+        if (this.sparkLife[i] > 0) alive++;
+      }
+      this.sparkActive = alive;
+      const sg = this.sparkPts.geometry;
+      sg.attributes.position.needsUpdate = true;
+      sg.attributes.aLife.needsUpdate = true;
+      sg.attributes.aColor.needsUpdate = true;
+      sg.attributes.aSize.needsUpdate = true;
     }
-    const sg = this.sparkPts.geometry;
-    sg.attributes.position.needsUpdate = true;
-    sg.attributes.aLife.needsUpdate = true;
-    sg.attributes.aColor.needsUpdate = true;
-    sg.attributes.aSize.needsUpdate = true;
 
     for (const f of this.flashes) {
       if (f.life > 0) { f.life -= dt; f.s.material.opacity = Math.max(0, f.life / 0.06); if (f.life <= 0) f.s.visible = false; }

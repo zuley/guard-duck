@@ -507,7 +507,7 @@ export class World {
   }
 
   _grass(rng) {
-    const count = this.quality === 'high' ? 20000 : 9000;
+    const maxCount = 20000;
     const geo = new THREE.PlaneGeometry(0.12, 0.4, 1, 3);
     geo.translate(0, 0.2, 0);
     const p = geo.attributes.position;
@@ -531,11 +531,11 @@ export class World {
            transformed.z += w * 0.05 * (position.y / 0.4);
          #endif`);
     };
-    const grass = new THREE.InstancedMesh(geo, mat, count);
+    const grass = new THREE.InstancedMesh(geo, mat, maxCount);
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     const col = new THREE.Color();
     let placed = 0, guard = 0;
-    while (placed < count && guard++ < count * 30) {
+    while (placed < maxCount && guard++ < maxCount * 30) {
       const x = (rng() - 0.5) * 84, z = (rng() - 0.5) * 84;
       const r = Math.hypot(x, z);
       if (Math.hypot(x - POND.x, z - POND.z) < POND.r + 0.9) continue;
@@ -557,7 +557,9 @@ export class World {
       grass.setColorAt(placed, col);
       placed++;
     }
-    grass.count = placed;
+    this._maxGrass = placed;
+    this.grassMesh = grass;
+    grass.count = Math.min(placed, this.quality === 'high' ? 20000 : 9000);
     grass.receiveShadow = true;
     grass.instanceMatrix.needsUpdate = true;
     if (grass.instanceColor) grass.instanceColor.needsUpdate = true;
@@ -649,6 +651,24 @@ export class World {
       g.userData = { a: rng() * 6, r: 30 + rng() * 14, h: 22 + rng() * 8, s: 0.05 + rng() * 0.04, w1, w2 };
       this.scene.add(g);
       this.birds.push(g);
+    }
+  }
+
+  setQuality(q) {
+    if (this.quality === q) return;
+    this.quality = q;
+    if (this.grassMesh) {
+      this.grassMesh.count = Math.min(this._maxGrass || 20000, q === 'high' ? 20000 : 9000);
+    }
+    if (this.sun) {
+      const sz = q === 'high' ? 2048 : 1024;
+      if (this.sun.shadow.mapSize.x !== sz) {
+        this.sun.shadow.mapSize.set(sz, sz);
+        if (this.sun.shadow.map) {
+          this.sun.shadow.map.dispose();
+          this.sun.shadow.map = null;
+        }
+      }
     }
   }
 

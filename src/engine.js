@@ -82,6 +82,10 @@ export class Engine {
 
     this.camPos = new THREE.Vector3(0, 11, 8.6);
     this.camLook = new THREE.Vector3(0, 0, 0);
+    this._lead = new THREE.Vector3();
+    this._desiredLook = new THREE.Vector3();
+    this._desiredPos = new THREE.Vector3();
+    this._shakeOff = new THREE.Vector3();
     this.shake = 0;
     this.damageFlash = 0;
     this.fps = 60;
@@ -111,20 +115,21 @@ export class Engine {
   addShake(amount) { this.shake = Math.min(1.2, this.shake + amount); }
 
   updateCamera(dt, focus, aimPoint) {
-    const lead = aimPoint.clone().sub(focus);
+    const lead = this._lead.subVectors(aimPoint, focus);
     lead.y = 0;
-    if (lead.length() > 4.5) lead.setLength(4.5);
-    const desiredLook = focus.clone().add(lead.multiplyScalar(0.4));
+    if (lead.lengthSq() > 4.5 * 4.5) lead.setLength(4.5);
+    const desiredLook = this._desiredLook.copy(focus).addScaledVector(lead, 0.4);
     desiredLook.y = 0.6;
-    const desiredPos = desiredLook.clone().add(new THREE.Vector3(0, 10.6, 8.6));
+    const desiredPos = this._desiredPos.set(desiredLook.x, desiredLook.y + 10.6, desiredLook.z + 8.6);
     const k = 1 - Math.exp(-dt * 5.5);
     this.camPos.lerp(desiredPos, k);
     this.camLook.lerp(desiredLook, k);
     this.shake = Math.max(0, this.shake - dt * 3.2);
     const s = this.shake * this.shake * 0.22;
     const t = performance.now() * 0.001;
-    this.camera.position.copy(this.camPos).add(new THREE.Vector3(
-      Math.sin(t * 47.3) * s, Math.sin(t * 39.1 + 2) * s * 0.7, Math.cos(t * 43.7) * s));
+    this._shakeOff.set(
+      Math.sin(t * 47.3) * s, Math.sin(t * 39.1 + 2) * s * 0.7, Math.cos(t * 43.7) * s);
+    this.camera.position.copy(this.camPos).add(this._shakeOff);
     this.camera.lookAt(this.camLook);
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2.4);
     this.grade.uniforms.uDamage.value = this.damageFlash;

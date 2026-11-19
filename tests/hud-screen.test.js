@@ -155,3 +155,52 @@ it('强化图鉴随当前武器显示多重射击和穿甲特例', () => {
   hud.renderCardBook(game);
   expect(descriptions()).toEqual([expect.stringContaining('额外发射 1 发'), expect.stringContaining('穿透 1 个敌人')]);
 });
+
+describe('HUD 脏检查缓存（Dirty-Checking）', () => {
+  it('相同数值重复调用 hp / dash / stats / coins / remain / shield 不重复触发 DOM 写入', () => {
+    const writes = { hpW: 0, hpTxt: 0, dashW: 0, wave: 0, kills: 0, score: 0, time: 0, coins: 0, remain: 0, shW: 0 };
+    const tracked = (key) => {
+      let val = '', styleW = '';
+      return {
+        get textContent() { return val; },
+        set textContent(v) { writes[key]++; val = String(v); },
+        style: {
+          get width() { return styleW; },
+          set width(v) { writes[key]++; styleW = v; },
+        },
+        classList: { toggle: vi.fn() },
+      };
+    };
+    const hud = Object.create(HUD.prototype);
+    hud._cache = {};
+    hud.el = {
+      hpFill: tracked('hpW'), hpText: tracked('hpTxt'), low: { classList: { toggle: vi.fn() } },
+      dashFill: tracked('dashW'),
+      statWave: tracked('wave'), statKills: tracked('kills'), statScore: tracked('score'), statTime: tracked('time'),
+      statCoins: tracked('coins'), statRemain: tracked('remain'),
+      shieldBar: { classList: { toggle: vi.fn() } }, shieldFill: tracked('shW'),
+    };
+
+    for (let i = 0; i < 10; i++) {
+      hud.hp(85, 100);
+      hud.dash(0.5);
+      hud.stats(2, 14, 1600, 45.2 + i * 0.05); // 同一秒内
+      hud.coins(165);
+      hud.remain(7);
+      hud.shield(40, 80, 3);
+    }
+    expect(writes).toEqual({
+      hpW: 1, hpTxt: 1, dashW: 1, wave: 1, kills: 1, score: 1, time: 1, coins: 1, remain: 1, shW: 1,
+    });
+
+    // 数值变化时才触发第二次写入
+    hud.hp(70, 100);
+    hud.coins(150);
+    hud.stats(2, 15, 1700, 46.1);
+    expect(writes.hpW).toBe(2);
+    expect(writes.hpTxt).toBe(2);
+    expect(writes.coins).toBe(2);
+    expect(writes.kills).toBe(2);
+    expect(writes.time).toBe(2);
+  });
+});

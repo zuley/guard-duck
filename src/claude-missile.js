@@ -3,6 +3,12 @@ import * as THREE from 'three';
 const NOZZLE_Z = -0.44;
 const TRAIL_LIFE = 0.32;
 const TRAIL_POINTS = 32;
+const _dir = new THREE.Vector3();
+const _look = new THREE.Vector3();
+const _inv = new THREE.Quaternion();
+const _tangent = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _edge = new THREE.Vector3();
 
 function lathe(profile) {
   return new THREE.LatheGeometry(profile.map(([r, z]) => new THREE.Vector2(r, z)), 16).rotateX(Math.PI / 2);
@@ -87,17 +93,17 @@ export class ClaudeMissileVisual extends THREE.Group {
   }
 
   advance(velocity, dt, camera) {
-    const direction = velocity.clone().normalize();
+    const direction = _dir.copy(velocity).normalize();
     const turn = this.heading.z * direction.x - this.heading.x * direction.z;
     const bank = THREE.MathUtils.clamp(-turn / Math.max(dt, 0.01) * 0.12, -0.68, 0.68);
     this.airframe.rotation.z = THREE.MathUtils.lerp(this.airframe.rotation.z, bank, 1 - Math.exp(-14 * dt));
     this.heading.copy(direction);
-    this.lookAt(this.position.clone().add(direction));
+    this.lookAt(_look.copy(this.position).add(direction));
     this.age += dt;
     const pulse = Math.sin(this.age * 54);
     this.exhaust.scale.set(1 + pulse * 0.09, 1 + pulse * 0.09, 0.9 + pulse * 0.14);
 
-    const nozzle = direction.multiplyScalar(NOZZLE_Z).add(this.position);
+    const nozzle = direction.clone().multiplyScalar(NOZZLE_Z).add(this.position);
     this.history.push({ point: nozzle, time: this.age });
     while (this.history.length > TRAIL_POINTS || this.age - this.history[0].time > TRAIL_LIFE) this.history.shift();
     this.updateTrail(camera);
@@ -107,18 +113,17 @@ export class ClaudeMissileVisual extends THREE.Group {
   updateTrail(camera) {
     const { position, color } = this.trailGeometry.attributes;
     const { r, g, b } = this.trailColor;
-    const inverse = this.quaternion.clone().invert();
-    const tangent = new THREE.Vector3(), side = new THREE.Vector3(), edge = new THREE.Vector3();
+    const inverse = _inv.copy(this.quaternion).invert();
     const last = this.history.length - 1;
     for (let i = 0; i <= last; i++) {
       const { point, time } = this.history[i];
       const fade = Math.max(0, 1 - (this.age - time) / TRAIL_LIFE);
       const width = 0.11 * fade;
-      tangent.subVectors(this.history[Math.min(i + 1, last)].point, this.history[Math.max(i - 1, 0)].point);
-      side.subVectors(camera.position, point).cross(tangent).normalize();
+      _tangent.subVectors(this.history[Math.min(i + 1, last)].point, this.history[Math.max(i - 1, 0)].point);
+      _side.subVectors(camera.position, point).cross(_tangent).normalize();
       for (let j = 0; j < 2; j++) {
-        edge.copy(point).addScaledVector(side, j ? width : -width).sub(this.position).applyQuaternion(inverse);
-        position.setXYZ(i * 2 + j, edge.x, edge.y, edge.z);
+        _edge.copy(point).addScaledVector(_side, j ? width : -width).sub(this.position).applyQuaternion(inverse);
+        position.setXYZ(i * 2 + j, _edge.x, _edge.y, _edge.z);
         color.setXYZW(i * 2 + j, r, g, b, 0.58 * fade * fade);
       }
     }
