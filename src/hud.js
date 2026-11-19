@@ -6,7 +6,17 @@ import {
 
 const $ = (id) => document.getElementById(id);
 const count = (n) => Number(n).toLocaleString('zh-CN');
+const statCoinFormat = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hex = (color) => '#' + color.toString(16).padStart(6, '0');
+
+function cardDescription(card, level, planId) {
+  if (planId === 'qwen' && card.id === 'g_multishot') return 'Qwen 每次固定发射一条半月刀，切换武器后此卡生效。';
+  if (card.id === 'r_pierce') {
+    if (planId === 'qwen') return 'Qwen 半月刀自带连续穿透，此卡切换至其他兼容武器后生效。';
+    if (planId === 'claude') return 'Claude 导弹命中后引爆，此卡切换至其他兼容武器后生效。';
+  }
+  return card.desc(level);
+}
 
 // 自绘枪械轮廓；颜色呼应枪身与曳光，不使用任何厂商标志。
 function weaponIcon(id) {
@@ -119,7 +129,7 @@ export class HUD {
     this.el.usageHint.classList.toggle('blocked', !!quote && quote.costMicros > game.walletMicros);
     this.el.usageHint.textContent = !quote ? '选择订阅后开始 · 主动技能不耗 Token' : quote.costMicros > game.walletMicros
       ? `余额不足一次调用 · ${count(quote.tokens)} Token / 次；移动、技能和拾取仍可用`
-      : `${count(quote.tokens)} Token / 次 · ${quote.costMicros ? `下次 ${formatCoins(microsToCoins(quote.costMicros))} 金币${quote.includedTokens ? '（部分按量）' : '（按量）'}` : '消耗本波额度'}`;
+      : `${count(quote.tokens)} Token / 次 · ${quote.costMicros ? `下次 ${formatCoins(microsToCoins(quote.costMicros))} 刀${quote.includedTokens ? '（部分按量）' : '（按量）'}` : '消耗本波额度'}`;
     this.renderProtections(this.el.protectionCounts, game.protections, game.wave);
   }
 
@@ -167,7 +177,7 @@ export class HUD {
     this.el.statTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
   }
 
-  coins(v) { this.el.statCoins.textContent = formatCoins(v); }
+  coins(v) { this.el.statCoins.textContent = statCoinFormat.format(Number(v)); }
 
   remain(v) { this.el.statRemain.textContent = v; }
 
@@ -315,7 +325,7 @@ export class HUD {
       tag.textContent = card.tag;
       const desc = document.createElement('p');
       desc.className = 'cdesc';
-      desc.textContent = card.desc(card.next);
+      desc.textContent = cardDescription(card, card.next, game.planId);
       const pips = document.createElement('div');
       pips.className = 'cpips';
       for (let k = 0; k < card.max; k++) {
@@ -402,7 +412,7 @@ export class HUD {
       rarTag.className = 'brar';
       rarTag.textContent = rar.label;
       const desc = document.createElement('p');
-      desc.textContent = c.desc(n);
+      desc.textContent = cardDescription(c, n, game.planId);
       body.append(head, rarTag, desc);
       el.append(art, body);
       grid.appendChild(el);
@@ -448,7 +458,7 @@ export class HUD {
       const affordable = subscription.feeMicros <= game.walletMicros;
       const rate = formatCoins(microsToCoins(usage.rateMicros * 1000));
       const action = equipped ? '当前订阅' : affordable ? (plan ? '付费切换' : '确认订阅')
-        : `还差 ${formatCoins(microsToCoins(subscription.feeMicros - game.walletMicros))} 金币`;
+        : `还差 ${formatCoins(microsToCoins(subscription.feeMicros - game.walletMicros))} 刀`;
       const tile = document.createElement('button');
       tile.type = 'button';
       tile.className = `weaponCard${equipped ? ' equipped' : ''}${!affordable && !equipped ? ' cant' : ''}`;
@@ -456,14 +466,14 @@ export class HUD {
       tile.style.setProperty('--gun-accent', hex(candidate.accent));
       tile.setAttribute('aria-pressed', String(equipped));
       tile.setAttribute('aria-disabled', String(!affordable || equipped));
-      tile.setAttribute('aria-label', `${candidate.label}，每波 ${formatCoins(candidate.fee)} 金币，发放 ${count(subscription.quota)} Token，每次调用 ${count(usage.tokens)} Token，超额每千 Token ${rate} 金币。${action}`);
+      tile.setAttribute('aria-label', `${candidate.label}，每波 ${formatCoins(candidate.fee)} 刀，发放 ${count(subscription.quota)} Token，每次调用 ${count(usage.tokens)} Token，超额每千 Token ${rate} 刀。${action}`);
       const art = put('weaponArt', '');
       art.appendChild(weaponIcon(candidate.id));
       const stats = put('weaponStats', '');
       for (const [label, value] of [
         ['每波额度', `${count(subscription.quota)} Token`],
         ['每次调用', `${count(usage.tokens)} Token`],
-        ['超额 / 千 Token', `${rate} 金币`],
+        ['超额 / 千 Token', `${rate} 刀`],
       ]) {
         const row = put('', '');
         row.append(put('', label), put('', value, 'b'));
@@ -472,7 +482,7 @@ export class HUD {
       const combat = put('weaponCombat', `伤害 ${candidate.damage}${candidate.pellets > 1 ? ` × ${candidate.pellets}` : ''} · ${candidate.rpm}/分 · ${candidate.range}m`);
       const desc = put('weaponDesc', candidate.desc);
       const foot = put('weaponFoot', '');
-      foot.append(put('weaponPrice', `${formatCoins(candidate.fee)} 金币 / 波`), put('weaponAction', action));
+      foot.append(put('weaponPrice', `${formatCoins(candidate.fee)} 刀 / 波`), put('weaponAction', action));
       tile.append(art, put('weaponName', candidate.label, 'b'), put('weaponTag', candidate.tag), stats, combat, desc, foot);
       // 不绑定 keydown：只用 button 原生 Space/Enter，避免一次确认重复扣款。
       tile.addEventListener('click', () => game.subscribe(candidate.id));
@@ -494,7 +504,7 @@ export class HUD {
     const summary = document.createElement('summary');
     summary.textContent = '定价与能力参考';
     const note = document.createElement('p');
-    note.textContent = 'API 参考价：美元 / 百万 Token，非缓存输入。金币按输入:输出 = 1:3 换算，订阅约省 25%，非真实会员套餐。战斗属性非模型实测，AA 指数非百分制。';
+    note.textContent = 'API 参考价：美元 / 百万 Token，非缓存输入。刀价按输入:输出 = 1:3 换算，订阅约省 25%，非真实会员套餐。战斗属性非模型实测，AA 指数非百分制。';
     details.append(summary, note);
     const list = document.createElement('ul');
     for (const plan of Object.values(PLANS)) {

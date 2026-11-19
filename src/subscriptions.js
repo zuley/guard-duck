@@ -19,39 +19,39 @@ export function pricingFromReference(inputUsd, outputUsd, quota) {
 
 const definitions = {
   claude: {
-    label: 'Claude', tag: '精准重击 · 自动追踪 · 命中爆炸', desc: '自动锁定追踪的导弹，命中即爆炸，贵但值得。', accent: 0xd97757,
-    quota: 1250, banChance: 0.05, tokensPerCall: 100,
+    label: 'Claude', tag: '重型追踪导弹 · 范围爆炸 · 地面灼烧', desc: '导弹引爆后留下火区，持续灼烧经过的敌人。', accent: 0xd97757,
+    quota: 1250, banChance: 0.05, tokensPerCall: 64,
     reference: { model: 'Claude Opus 5.5', inputUsd: 4, outputUsd: 20, score: 59, effort: 'Max / Default Fallback', scope: '标准非缓存 API', url: 'https://platform.claude.com/docs/en/about-claude/pricing' },
-    model: 'rifle', damage: 100, rpm: 420, pellets: 1, intrinsicPierce: 0,
-    bulletSpeed: 20, spreadBase: 0.006, range: 54, falloffStart: 32, falloffEnd: 54, falloffMin: 0.8,
+    model: 'rifle', damage: 65, rpm: 420, pellets: 1, intrinsicPierce: 0,
+    bulletSpeed: 23, spreadBase: 0.012, range: 54, falloffStart: 32, falloffEnd: 54, falloffMin: 0.8,
   },
   gpt: {
-    label: 'GPT', tag: '均衡高输出 · 稳定可靠', desc: '全能步枪，射速与威力的黄金平衡。', accent: 0x10a37f,
-    quota: 1000, banChance: 0.0005,
+    label: 'GPT', tag: '激光直射 · 瞬时命中 · 无落点', desc: '绿色激光指哪打哪，瞬时直达首个目标，没有弹道与落点环。', accent: 0x10a37f,
+    quota: 2000, banChance: 0.0005,
     reference: { model: 'GPT-6.1 Sol', inputUsd: 2, outputUsd: 10, score: 55, effort: 'Max', scope: '标准短上下文 API', url: 'https://developers.openai.com/api/docs/pricing.md' },
-    model: 'rifle', damage: 45, rpm: 600, pellets: 1, intrinsicPierce: 0,
-    bulletSpeed: 85, spreadBase: 0.01, range: 44, falloffStart: 25, falloffEnd: 44, falloffMin: 0.7,
+    model: 'rifle', damage: 25, rpm: 600, pellets: 1, intrinsicPierce: 0,
+    bulletSpeed: 51, spreadBase: 0, range: 44, falloffStart: 25, falloffEnd: 44, falloffMin: 0.7,
   },
   qwen: {
-    label: 'Qwen', tag: '高频连续调用 · 经济实惠', desc: '泼水般的高射速，用数量碾压一切。', accent: 0x615ced,
+    label: 'Qwen', tag: '大型半月刀 · 自带穿透', desc: '每次发射一条宽幅紫色半月刀，可连续穿透沿途敌人。', accent: 0x615ced,
     quota: 1200, banChance: 0,
     reference: { model: 'Qwen3.8-Max / 0902', inputUsd: 2, outputUsd: 6, score: 34, effort: '默认', scope: 'International 部署 API', url: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing' },
-    model: 'rifle', damage: 21, rpm: 780, pellets: 1, intrinsicPierce: 0,
-    bulletSpeed: 74, spreadBase: 0.016, range: 34, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55,
+    model: 'rifle', damage: 6, rpm: 780, pellets: 1, intrinsicPierce: 0,
+    bulletSpeed: 44, spreadBase: 0.032, range: 34, falloffStart: 18, falloffEnd: 34, falloffMin: 0.55,
   },
   glm: {
-    label: 'GLM', tag: '近距散射爆发 · 一次调用五发', desc: '贴脸五连喷，近距离的绝对暴力。', accent: 0x3b82f6,
+    label: 'GLM', tag: '近程扇面气泡 · 一次调用六发', desc: '六颗慢速气泡沿宽扇面水平飞行，擦到敌人也会命中。', accent: 0x3b82f6,
     quota: 1600, banChance: 0,
     reference: { model: 'GLM-5.3', inputUsd: 1.4, outputUsd: 4.4, score: 32, effort: 'Max', scope: '标准非缓存 API', url: 'https://docs.z.ai/guides/overview/pricing.md' },
-    model: 'shotgun', damage: 17, rpm: 180, pellets: 5, intrinsicPierce: 0, pelletSpread: 0.1,
-    bulletSpeed: 60, spreadBase: 0.035, range: 22, falloffStart: 11, falloffEnd: 22, falloffMin: 0.35,
+    model: 'shotgun', damage: 5, rpm: 180, pellets: 6, intrinsicPierce: 0, pelletSpread: Math.PI / 4,
+    bulletSpeed: 9, spreadBase: 0.07, range: 12, falloffStart: 6, falloffEnd: 12, falloffMin: 0.35,
   },
   ds: {
     label: 'DS', tag: '低价长续航 · 入门首选', desc: '便宜管饱的万金油，新手之友。', accent: 0x4d8bff,
-    quota: 2000, banChance: 0,
+    quota: 2000, banChance: 0, tokensPerCall: 11, // 32 ÷ 3 向上取整，按整 Token 计费
     reference: { model: 'DeepSeek V4.1-Flash-1017', inputUsd: 0.3, outputUsd: 1.2, score: 33, effort: 'Max', scope: '峰时、输入 cache miss；谷时半价，游戏不动态变价', url: 'https://api-docs.deepseek.com/quick_start/pricing' },
-    model: 'rifle', damage: 34, rpm: 480, pellets: 1, intrinsicPierce: 0,
-    bulletSpeed: 80, spreadBase: 0.012, range: 42, falloffStart: 24, falloffEnd: 42, falloffMin: 0.65,
+    model: 'rifle', damage: 3, rpm: 720, pellets: 1, intrinsicPierce: 0,
+    bulletSpeed: 48, spreadBase: 0.024, range: 42, falloffStart: 24, falloffEnd: 42, falloffMin: 0.65,
   },
 };
 
@@ -69,7 +69,7 @@ export function getPlan(id) {
 export function coinsToMicros(coins) {
   const micros = Math.round(coins * MICROCOINS_PER_COIN);
   if (typeof coins !== 'number' || !Number.isFinite(coins) || coins < 0 || !Number.isSafeInteger(micros)) {
-    throw new RangeError('金币金额必须是非负、安全范围内的数字');
+    throw new RangeError('刀金额必须是非负、安全范围内的数字');
   }
   return micros === 0 ? 0 : micros;
 }

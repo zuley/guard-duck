@@ -20,7 +20,7 @@ const spies = (names) => Object.fromEntries(names.split(' ').map((name) => [name
 function duck() {
   const d = {
     group: new THREE.Group(), root: new THREE.Group(), yaw: 0, deathT: -1,
-    update: vi.fn(), kick: vi.fn(), dispose: vi.fn(),
+    update: vi.fn(), kick: vi.fn(), dispose: vi.fn(), setRage: vi.fn(),
     muzzleWorld: (out) => out.set(0, 0.8, 3),
   };
   d.die = vi.fn(() => { d.deathT = 0; });
@@ -31,7 +31,7 @@ function enemy(type = 'brawler', hp = 100) {
     type, name: '测试需求鸭', elite: false, dead: false,
     hp, maxHp: hp, pos: new THREE.Vector3(0, 0, 4), vel: new THREE.Vector3(),
     radius: 0.5, scale: 1, damage: 10, speed: 1, reach: 1.5,
-    fireT: 1, windup: 0, attackT: 1, seed: 0,
+    fireT: 1, windup: 0, attackT: 1, seed: 0, rootT: 0,
     skillKind: null, skillCd: 1, skillT: 0, duck: duck(),
   };
 }
@@ -43,14 +43,16 @@ function makeGame() {
   g.world = { colliders: [], update: vi.fn() };
   g.hud = spies('toast weaponsOpen renderWeapons subscription coins cardOpen cardBookOpen cardBook renderCards renderCardBook hitmarker feed banner results screen hudOn alert damage syncVolume');
   g.audio = spies('uiClick emptyClick shoot pickup hit hurt kill waveClear waveHorn cardDeal cardPick levelUp skillCast dash gameOver stopMusic startMusic boom swing enemyShoot zap');
-  g.fx = spies('ring number feathers spark flash smoke update zone decal bolt');
+  g.fx = spies('ring number feathers bladeShards spark flash smoke update zone decal bolt shout beam');
   g.state = 'playing'; g.fragile = false; g.bot = false; g.best = null;
   g.keys = new Set(); g.mouse = { x: 400, y: 300, down: false };
   g.mouseFire = false; g.padFire = false; g.padAim = null; g.padPrev = [];
   g.t = 0; g.rng = rules.mulberry32(123); g.banRng = vi.fn(() => 1);
   g.playerDuck = duck();
-  g.playerHpBar = { group: new THREE.Group(), fill: new THREE.Object3D() };
-  g.impactMarker = new THREE.Object3D(); g.impactPoint = new THREE.Vector3();
+  g.playerHpBar = { group: new THREE.Group(), fill: new THREE.Object3D(), shieldBg: new THREE.Object3D(), shieldFill: new THREE.Object3D(), label: null, nameBaseY: 0 };
+  g.shieldDome = { visible: false, position: new THREE.Vector3(), scale: { setScalar: vi.fn() }, material: { uniforms: { uT: { value: 0 }, uFade: { value: 1 } } } };
+  g.domePop = 0;
+  g.impactMarker = new THREE.Object3D(); g.bulletStop = new THREE.Vector3();
   g.aimPoint = new THREE.Vector3(0, 0.8, 20); g.ray = new THREE.Raycaster();
   g._frustum = new THREE.Frustum(); g._projMat = new THREE.Matrix4();
   g.enemies = []; g.bullets = []; g.ebullets = []; g.pickups = []; g.orbitals = [];
@@ -115,9 +117,9 @@ describe('开局与单一订阅账本', () => {
     expect(g.state).toBe('playing'); expect(g.coins).toBe(165);
     expect(g.subscription).toEqual({ paidWave: 1, processedWave: 1 });
     g.fire();
-    expect(g.tokens).toBe(1968);
+    expect(g.tokens).toBe(1989);
     g.nextWave();
-    expect(g.wave).toBe(1); expect(g.coins).toBe(165); expect(g.tokens).toBe(1968);
+    expect(g.wave).toBe(1); expect(g.coins).toBe(165); expect(g.tokens).toBe(1989);
   });
 
   it('未选择时关闭回标题，不能无订阅绕过', () => {
@@ -182,7 +184,7 @@ describe('开局与单一订阅账本', () => {
     expect(g.creditCoins(20)).toBe(true);
     expect(g.coinsEarned).toBe(20); expect(g.coins).toBe(185);
     g.tokens = 0; expect(g.fire()).toBe(true);
-    expect(g.walletMicros).toBe(184_688_000); expect(g.coinsEarned).toBe(20);
+    expect(g.walletMicros).toBe(184_892_750); expect(g.coinsEarned).toBe(20);
   });
 });
 
@@ -200,10 +202,10 @@ describe('波次续订 / 预付 / 经济卡', () => {
   it('波间切换预付下一波，提前使用的额度不会在下波重复发放', () => {
     const g = subscribed(); g.nextWave();
     g.waveState = 'inter'; g.openWeapons(); expect(g.subscribe('gpt')).toBe(true);
-    expect(g.subscription.paidWave).toBe(2); expect(g.coins).toBe(105);
-    g.closeWeapons(); expect(g.fire()).toBe(true); expect(g.tokens).toBe(968);
+    expect(g.subscription.paidWave).toBe(2); expect(g.coins).toBe(45);
+    g.closeWeapons(); expect(g.fire()).toBe(true); expect(g.tokens).toBe(1968);
     g.nextWave();
-    expect(g.wave).toBe(2); expect(g.tokens).toBe(968); expect(g.coins).toBe(105);
+    expect(g.wave).toBe(2); expect(g.tokens).toBe(1968); expect(g.coins).toBe(45);
   });
 
   it('失败续订不扣部分费用、不发额度，本波后来进账也不自动重试', () => {
@@ -229,7 +231,7 @@ describe('波次续订 / 预付 / 经济卡', () => {
     g.nextWave(); expect(g.tokens).toBe(2500); expect(g.coins).toBe(150);
   });
 
-  it('预算补贴选一次只加30金币，折扣只作用按量价不减订阅费', () => {
+  it('预算补贴选一次只加30刀，折扣只作用按量价不减订阅费', () => {
     const g = subscribed(); const before = g.walletMicros;
     selectCard(g, 'c_ammo');
     expect(g.walletMicros).toBe(before + coinsToMicros(30)); expect(g.coinsEarned).toBe(30);
@@ -240,7 +242,7 @@ describe('波次续订 / 预付 / 经济卡', () => {
     expect(g.usageQuote().rateMicros).toBe(32850);
   });
 
-  it('真实击杀返现4金币且只结算一次，不回收虚假弹药', () => {
+  it('真实击杀返现4刀且只结算一次，不回收虚假弹药', () => {
     const g = subscribed(); g.cards.r_ammoBack = 1; g.recomputeLoadout(); g.rng = () => 0;
     const e = enemy(), before = g.coins;
     g.killEnemy(e);
@@ -252,13 +254,13 @@ describe('波次续订 / 预付 / 经济卡', () => {
 });
 
 describe('武器调用计费与封号', () => {
-  it('GLM散射+多重射击7发只计32 Token、一次调用，安全计划不访问风险 RNG', () => {
+  it('GLM散射+多重射击8发只计32 Token、一次调用，安全计划不访问风险 RNG', () => {
     const g = subscribed('glm'); g.cards.g_multishot = 2; g.recomputeLoadout();
     const before = g.walletMicros;
     expect(g.fire()).toBe(true);
     expect(g.tokens).toBe(1568); expect(g.walletMicros).toBe(before);
     expect(g.calls).toBe(1); expect(g.tokensUsed).toBe(32);
-    expect(g.shots).toBe(7); expect(g.bullets).toHaveLength(7);
+    expect(g.shots).toBe(8); expect(g.bullets).toHaveLength(8);
     expect(g.banRng).not.toHaveBeenCalled();
   });
 
@@ -309,7 +311,7 @@ describe('武器调用计费与封号', () => {
     expect(g.fire()).toBe(false);
     expect(g.state).toBe('over'); expect(g.p.hp).toBe(0);
     expect(g.p.shield).toBe(9999); expect(g.guardianCd).toBe(0); expect(g.phoenixUsed).toBe(false);
-    expect(g.tokens).toBe(0); expect(g.walletMicros).toBe(before - coinsToMicros(12.8));
+    expect(g.tokens).toBe(0); expect(g.walletMicros).toBe(before - coinsToMicros(7.04));
     expect(g.calls).toBe(1); expect(g.shots).toBe(0);
     expect(g.playerDuck.die).toHaveBeenCalledTimes(1); expect(g.playerHpBar.group.visible).toBe(false);
   });
@@ -317,8 +319,11 @@ describe('武器调用计费与封号', () => {
   it('0余额/0额度仍能释放冷却技能、击杀恢复收入，不产生调用费/封号抽取', () => {
     const g = subscribed('gpt'); g.tokens = 0; g.coins = 0;
     const e = enemy('brawler', 1); g.enemies = [e];
+    g.aimPoint.copy(e.pos);
     expect(g.fire()).toBe(false); g.castSkill(1);
-    expect(g.skillCd.storm).toBeGreaterThan(0); expect(e.dead).toBe(true);
+    expect(g.skillCd.storm).toBeGreaterThan(0);
+    g.updateBombs(0.7);
+    expect(e.dead).toBe(true);
     expect(g.coins).toBeGreaterThan(0); expect(g.calls).toBe(0); expect(g.tokensUsed).toBe(0);
     expect(g.banRng).not.toHaveBeenCalled(); expect(g.state).toBe('playing');
   });
@@ -333,15 +338,134 @@ describe('武器调用计费与封号', () => {
     oldMods.frost.factor = 0.99; expect(attack.mods.frost.factor).toBe(0.5);
     g.coins = 100; g.walletMicros = coinsToMicros(100); // Claude 订阅费提高后补足余额，确保付费切换成功
     g.openWeapons(); g.subscribe('glm'); g.closeWeapons();
-    const e = enemy('brawler', 10000); e.pos.set(0, 0, 10); g.enemies = [e];
+    const e = enemy('brawler', 10000); e.pos.set(0, 0, 10);
+    const near = enemy(); near.pos.set(1, 0, 10.1);
+    const far = enemy(); far.pos.set(4.7, 0, 10.1);
+    const outside = enemy(); outside.pos.set(5.1, 0, 10.1);
+    g.enemies = [e, near, far, outside];
     b.pos.set(0, 0.8, 9.8); b.vel.set(0, 0, 60); b.traveled = 40;
     g.applyHitMods = vi.fn();
     g.updateBullets(0.01);
-    const expected = rules.damageAtDistance(100, 40.3, attack);
+    const expected = rules.damageAtDistance(b.dmg, 40.3, attack);
     expect(e.hp).toBeCloseTo(10000 - expected);
-    expect(expected).not.toBeCloseTo(rules.damageAtDistance(100, 40.3, g.loadout));
+    expect(near.hp).toBeCloseTo(100 - expected * (0.65 - 0.35 / 5));
+    expect(far.hp).toBeGreaterThan(near.hp);
+    expect(far.hp).toBeLessThan(far.maxHp);
+    expect(outside.hp).toBe(outside.maxHp);
+    expect(expected).not.toBeCloseTo(rules.damageAtDistance(b.dmg, 40.3, g.loadout));
     expect(g.applyHitMods).toHaveBeenCalledWith(e, expect.any(THREE.Vector3), expect.closeTo(expected), attack.mods);
+    expect(g.applyHitMods).toHaveBeenCalledTimes(1);
     expect(g.hits).toBe(1); expect(b.pierce).toBe(0); expect(g.bullets).toHaveLength(0); // 命中即引爆消失
+  });
+
+  it('Claude 只锁前方，目标被击倒后改追剩余射程内的前方敌人', () => {
+    const g = subscribed('claude');
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const behind = enemy(); behind.pos.set(0, 0, 1);
+    const primary = enemy(); primary.pos.set(0, 0, 12);
+    const backup = enemy(); backup.pos.set(3, 0, 12);
+    const far = enemy(); far.pos.set(0, 0, 55);
+    g.enemies = [behind];
+    expect(g.fire()).toBe(true);
+    expect(g.bullets[0].target).toBeNull();
+    g.p.fireT = 0;
+    g.enemies.push(primary, backup, far);
+    expect(g.fire()).toBe(true);
+    const b = g.bullets[1];
+    expect(b.target).toBe(primary);
+    primary.dead = true;
+    b.traveled = 5;
+    g.steerMissile(b, 0.016);
+    expect(b.target).toBe(backup);
+    expect(b.vel.x).toBeGreaterThan(0);
+    expect(b.vel.length()).toBeCloseTo(23);
+  });
+
+  it.each(['掩体', '地面'])('Claude 导弹撞到%s时，范围内多个敌人受伤且只记一次命中', (surface) => {
+    const g = subscribed('claude');
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    expect(g.fire()).toBe(true);
+    const b = g.bullets[0];
+    if (surface === '掩体') g.world.colliders.push({ x: 0, z: 3.4, r: 0.3 });
+    else { b.pos.y = 0.06; b.vel.y = -1; }
+    const left = enemy(); left.pos.set(-1.5, 0, 3.6);
+    const right = enemy(); right.pos.set(1.5, 0, 3.6);
+    g.enemies = [left, right];
+    g.updateBullets(0.06);
+    expect(g.bullets).toHaveLength(0);
+    expect(left.hp).toBeLessThan(left.maxHp);
+    expect(right.hp).toBeLessThan(right.maxHp);
+    expect(g.hits).toBe(1);
+  });
+
+  it('Claude 火区灼烧后来经过的敌人，退出或到期后停止，暂停时保留火区', () => {
+    const g = subscribed('claude');
+    expect(g.fire()).toBe(true);
+    const b = g.bullets[0];
+    g.missileExplode(b);
+    const target = enemy();
+    g.enemies.push(target);
+    target.pos.copy(b.pos).x += 5.1;
+    g.updateMissileFires(0.82);
+    expect(target.hp).toBe(100);
+    target.pos.x -= 0.2;
+    g.updateMissileFires(1);
+    expect(target.hp).toBeCloseTo(87);
+    g.state = 'paused';
+    g.updateMissileFires(5);
+    expect(target.hp).toBeCloseTo(87);
+    expect(g.missileFires[0].elapsed).toBeCloseTo(1.82);
+    g.state = 'playing';
+    target.pos.x += 0.2;
+    g.updateMissileFires(2);
+    expect(target.hp).toBeCloseTo(87);
+    target.pos.x -= 0.2;
+    const visual = g.missileFires[0].visual;
+    g.updateMissileFires(1.2);
+    expect(target.hp).toBeCloseTo(74);
+    expect(g.missileFires).toHaveLength(0);
+    expect(visual.parent).toBeNull();
+    expect(g.hits).toBe(0);
+  });
+
+  it('Claude 火星先落在爆心再落到边缘，只有已点燃的位置开始灼烧', () => {
+    const g = subscribed('claude');
+    expect(g.fire()).toBe(true);
+    const b = g.bullets[0];
+    g.missileExplode(b);
+    const center = enemy(), edge = enemy();
+    center.pos.copy(b.pos);
+    edge.pos.copy(b.pos).x += 5;
+    g.enemies = [center, edge];
+    const ground = g.missileFires[0].visual.children[0];
+
+    g.updateMissileFires(0.2);
+    expect(ground.visible).toBe(false);
+    expect(center.hp).toBe(100);
+    expect(edge.hp).toBe(100);
+    g.updateMissileFires(0.3);
+    expect(ground.visible).toBe(true);
+    expect(center.hp).toBeCloseTo(96.62);
+    expect(edge.hp).toBe(100);
+    g.updateMissileFires(0.5);
+    expect(edge.hp).toBeCloseTo(97.66);
+  });
+
+  it('Claude 重叠火区只结算最强灼烧，清场同步移除火焰', () => {
+    const g = subscribed('claude');
+    g.fire();
+    const b = g.bullets[0];
+    g.missileExplode(b, undefined, 40);
+    g.missileExplode(b, undefined, 65);
+    const visuals = g.missileFires.map(({ visual }) => visual);
+    const target = enemy();
+    target.pos.copy(b.pos);
+    g.enemies.push(target);
+    g.updateMissileFires(1.24);
+    expect(target.hp).toBeCloseTo(87);
+    g.clearField();
+    expect(g.missileFires).toHaveLength(0);
+    expect(visuals.every(visual => !visual.parent)).toBe(true);
   });
 });
 
@@ -460,14 +584,14 @@ describe('保护掉落、结算幂等与死亡帧', () => {
 
 describe('审查回归：集中结算与派生状态', () => {
   it('直接提交结算器的余额和额度，不再次经 debitMicros 重复计费', () => {
-    const g = subscribed(); g.coins = 1; g.tokens = 16;
+    const g = subscribed(); g.coins = 1; g.tokens = 9;
     const debit = vi.spyOn(g, 'debitMicros');
     const payment = g.payInvocation();
-    expect(payment).toMatchObject({ walletMicros: 844000, remainingTokens: 0, costMicros: 156000 });
+    expect(payment).toMatchObject({ walletMicros: 980500, remainingTokens: 0, costMicros: 19500 });
     expect(g.walletMicros).toBe(payment.walletMicros); expect(g.tokens).toBe(payment.remainingTokens);
-    expect(g.calls).toBe(1); expect(g.tokensUsed).toBe(32);
+    expect(g.calls).toBe(1); expect(g.tokensUsed).toBe(11);
     expect(debit).not.toHaveBeenCalled();
-    g.coins = 0; g.tokens = 31;
+    g.coins = 0; g.tokens = 10;
     const before = balances(g);
     expect(g.payInvocation()).toBeNull(); expect(balances(g)).toEqual(before);
     expect(debit).not.toHaveBeenCalled();
@@ -479,7 +603,7 @@ describe('审查回归：集中结算与派生状态', () => {
     expect(g.subscription).toEqual({ paidWave: 0, processedWave: 0 });
     g.state = 'weapons'; g.subscribe('ds'); g.nextWave(); g.tokens = 0;
     expect(g.subscriptionStatus).toBe('active');
-    g.waveState = 'inter'; g.openWeapons(); g.coins = 100; g.subscribe('gpt'); g.closeWeapons();
+    g.waveState = 'inter'; g.openWeapons(); g.coins = 160; g.subscribe('gpt'); g.closeWeapons();
     expect(g.subscriptionStatus).toBe('active');
     expect(g.subscription).toEqual({ paidWave: 2, processedWave: 2 });
     g.nextWave(); expect(g.coins).toBe(40); expect(g.subscriptionStatus).toBe('active');
@@ -546,21 +670,372 @@ describe('审查回归：纯手柄免费技能', () => {
     expect(cast).not.toHaveBeenCalled(); expect(g.skillCd.storm).toBe(0);
   });
 
-  it('真实14次Claude调用耗尽预算后，纯手柄免费击杀能恢复射击', () => {
+  it('真实 22 次 Claude 调用耗尽预算后，纯手柄免费击杀能恢复射击', () => {
     const g = subscribed('claude'), poll = installGamepad(g);
-    for (let i = 0; i < 14; i++) { g.p.fireT = 0; expect(g.fire()).toBe(true); }
-    expect(g.tokens).toBe(0); expect(g.coins).toBe(6); expect(g.calls).toBe(14);
+    for (let i = 0; i < 22; i++) { g.p.fireT = 0; expect(g.fire()).toBe(true); }
+    expect(g.tokens).toBe(0); expect(g.coins).toBe(4.72); expect(g.calls).toBe(22);
     g.p.fireT = 0; expect(g.fire()).toBe(false);
     const e1 = enemy('brawler', 1), e2 = enemy('brawler', 1); g.enemies = [e1, e2];
+    g.aimPoint.copy(e1.pos);
     const calls = g.calls, used = g.tokensUsed, draws = g.banRng.mock.calls.length;
     poll(12);
-    expect(e1.dead).toBe(true); expect(e2.dead).toBe(true); expect(g.coins).toBeGreaterThan(6);
+    g.updateBombs(0.7);
+    expect(e1.dead).toBe(true); expect(e2.dead).toBe(true); expect(g.coins).toBeGreaterThan(4.72);
     expect(g.skillCd.storm).toBeGreaterThan(0);
     expect(g.calls).toBe(calls); expect(g.tokensUsed).toBe(used);
     expect(g.banRng).toHaveBeenCalledTimes(draws);
     const wallet = g.walletMicros;
     expect(g.fire()).toBe(true); expect(g.calls).toBe(calls + 1);
-    expect(g.walletMicros).toBe(wallet - coinsToMicros(16));
+    expect(g.walletMicros).toBe(wallet - coinsToMicros(10.24));
     expect(g.banRng).toHaveBeenCalledTimes(draws + 1); expect(g.state).toBe('playing');
+  });
+});
+
+describe('打工人技能经济钩子', () => {
+  it('加班击杀按人头结算加班费，普通击杀不结算', () => {
+    const g = subscribed();
+    const base = Math.round(rules.coinsFor('brawler', false) * g.loadout.coinMul);
+    const e1 = enemy('brawler', 1); g.enemies = [e1];
+    const before = g.coins;
+    g.damageEnemy(e1, 10, { source: 'overtime' });
+    expect(e1.dead).toBe(true);
+    expect(g.coins).toBe(before + base + rules.SKILL_TUNING.overtimeCoins);
+    const e2 = enemy('brawler', 1); g.enemies = [e2];
+    const mid = g.coins;
+    g.damageEnemy(e2, 10);
+    expect(g.coins).toBe(mid + base);
+  });
+
+  it('调休自然到期把未用完的盾折现回血，钳在生命上限', () => {
+    const g = subscribed(); g.level = 3; g.recomputeLoadout();
+    g.p.hp = 30; g.p.lastHurt = 0;
+    g.castSkill(2);
+    const pool = g.p.skillShield;
+    expect(pool).toBeGreaterThan(0);
+    g.updatePlayer(g.loadout.shield.duration + 0.1);
+    expect(g.p.skillShield).toBe(0);
+    expect(g.p.shield).toBe(0);
+    expect(g.p.hp).toBe(Math.min(g.p.maxHp, 30 + pool));
+  });
+
+  it('调休盾被打破不折现', () => {
+    const g = subscribed(); g.level = 3; g.recomputeLoadout();
+    g.p.hp = 30; g.p.lastHurt = 0;
+    g.castSkill(2);
+    g.p.iframes = 0;
+    g.damagePlayer(g.p.shield + 10);
+    expect(g.p.shieldSkillT).toBe(0);
+    expect(g.p.hp).toBe(20);
+    g.updatePlayer(g.loadout.shield.duration + 0.1);
+    expect(g.p.hp).toBe(20);
+    expect(g.p.skillShield).toBe(0);
+  });
+
+  it('DS、Qwen 和 Claude 发射时沿水平瞄准方向出膛', () => {
+    for (const id of ['ds', 'qwen', 'claude']) {
+      const g = subscribed(id); g.state = 'playing';
+      g.aimPoint.set(0, 0, 8);
+      g.p.fireT = 0;
+      expect(g.fire()).toBe(true);
+      const b = g.bullets[g.bullets.length - 1];
+      expect(b.vel.y).toBe(0);
+      expect(b.vel.z).toBeGreaterThan(0);
+    }
+  });
+
+  it('GLM 的六颗气泡沿扇面中线对称平射', () => {
+    const g = subscribed('glm');
+    g.state = 'playing';
+    g.padAim = { x: 0, z: 1 };
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    g.updatePlayer(0);
+    expect(g.bulletStop.z).toBeCloseTo(15);
+    expect(g.fire()).toBe(true);
+    expect(g.calls).toBe(1);
+    expect(g.tokensUsed).toBe(32);
+    const b = g.bullets[2];
+    const launchY = b.pos.y;
+
+    g.updateBullets(0.6);
+    const xs = g.bullets.map(({ pos }) => pos.x);
+    expect(xs).toHaveLength(6);
+    expect(xs.every((x, i) => i === 0 || x > xs[i - 1])).toBe(true);
+    expect(xs[5] - xs[0]).toBeGreaterThan(4);
+    expect(xs[2]).toBeCloseTo(-xs[3]);
+    expect(b.traveled).toBeCloseTo(5.4);
+    expect(g.bullets.every(({ pos }) => pos.y === launchY)).toBe(true);
+
+    g.updateBullets(0.6);
+    expect(b.pos.y).toBe(launchY);
+    g.updateBullets(0.2);
+    expect(g.bullets).toHaveLength(0);
+    expect(Math.hypot(b.pos.x, b.pos.z - 3)).toBeCloseTo(g.bulletStop.z - 3);
+    expect(g.fx.ring).toHaveBeenCalledTimes(6);
+    expect(g.fx.decal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { x: 0.839, hit: true },
+    { x: 0.86, hit: false },
+  ])('GLM 气泡按实际半径检测擦边，偏移 $x 命中为 $hit', ({ x, hit }) => {
+    const g = subscribed('glm');
+    g.state = 'playing';
+    g.padAim = { x: 0, z: 1 };
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const target = enemy();
+    target.pos.set(x, 0.45, 4.05);
+    target.scale = 0.4;
+    g.enemies.push(target);
+    g.updatePlayer(0);
+    expect(g.bulletStop.z < 5).toBe(hit);
+    expect(g.fire()).toBe(true);
+    const b = g.bullets[2];
+    const angle = Math.atan2(b.vel.x, b.vel.z);
+    target.pos.sub(b.pos).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle).add(b.pos);
+    g.bullets = [b];
+    g.updateBullets(0.1);
+    expect(g.hits).toBe(0);
+    g.updateBullets(0.2);
+    expect(g.hits).toBe(hit ? 1 : 0);
+    expect(target.hp < target.maxHp).toBe(hit);
+  });
+
+  it.each([{ x: 1.735, hit: true }, { x: 1.77, hit: false }])('Qwen 半月刀擦边判定：偏移 $x 命中为 $hit', ({ x, hit }) => {
+    const g = subscribed('qwen');
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const target = enemy();
+    target.pos.set(x, 0, 4.48);
+    g.enemies.push(target);
+    expect(g.fire()).toBe(true);
+    g.updateBullets(0.06);
+    expect(target.hp).toBe(hit ? 94 : 100);
+    expect(g.hits).toBe(hit ? 1 : 0);
+    expect(g.fx.bladeShards).toHaveBeenCalledTimes(hit ? 1 : 0);
+  });
+
+  it('Qwen 叠加多重射击后每次仍只发射一条半月刀', () => {
+    const g = subscribed('qwen');
+    g.cards.g_multishot = 2;
+    g.recomputeLoadout();
+    expect(g.loadout.mods.multishot).toBe(2);
+    expect(g.fire()).toBe(true);
+    expect(g.bullets).toHaveLength(1);
+    expect(g.shots).toBe(1);
+    expect(g.calls).toBe(1);
+    expect(g.tokensUsed).toBe(32);
+  });
+
+  it('Qwen 半月刀穿过同排与后排敌人，每个只受伤一次，碰到掩体停止', () => {
+    const g = subscribed('qwen');
+    g.padAim = { x: 0, z: 1 };
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    g.enemies = [[-0.6, 4.5], [0.6, 4.5], [0, 6.5], [0, 10.5]].map(([x, z]) => {
+      const e = enemy();
+      e.pos.set(x, 0, z);
+      return e;
+    });
+    g.world.colliders.push({ x: 0, z: 8.5, r: 0.5 });
+    g.updatePlayer(0);
+    expect(g.bulletStop.z).toBeCloseTo(8);
+    expect(g.fire()).toBe(true);
+    g.updateBullets(0.085);
+    expect(g.bullets).toHaveLength(1);
+    expect(g.enemies.map(({ hp }) => hp)).toEqual([94, 94, 94, 100]);
+    g.updateBullets(0.06);
+    expect(g.bullets).toHaveLength(0);
+    expect(g.enemies.map(({ hp }) => hp)).toEqual([94, 94, 94, 100]);
+    expect(g.hits).toBe(1);
+  });
+
+  it('Qwen 纵向接触以前不结算伤害，进入刃深后才命中', () => {
+    const g = subscribed('qwen');
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const e = enemy();
+    e.pos.set(0, 0, 4.7);
+    g.enemies = [e];
+    expect(g.fire()).toBe(true);
+    g.updateBullets(0.001);
+    expect(e.hp).toBe(100);
+    g.updateBullets(0.025);
+    expect(e.hp).toBe(94);
+  });
+
+  it.each([0, 1])('GPT 按激光接触距离结算，穿甲层数为 %s', (pierce) => {
+    const g = subscribed('gpt');
+    g.cards.r_pierce = pierce;
+    g.recomputeLoadout();
+    const near = enemy(), far = enemy();
+    near.pos.set(-0.5, 0, 4.31);
+    far.pos.set(0.5, 0, 4.4);
+    g.enemies = [far, near];
+    expect(g.fire()).toBe(true);
+    expect(near.hp).toBe(75);
+    expect(far.hp).toBe(pierce ? 80 : 100);
+    expect(g.hits).toBe(1);
+  });
+
+  it.each(['qwen', 'gpt'])('%s 不会伤到紧贴薄掩体后方的敌人', (plan) => {
+    const g = subscribed(plan);
+    g.padAim = { x: 0, z: 1 };
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const e = enemy();
+    e.pos.set(0, 0, plan === 'qwen' ? 5.9 : 5.4);
+    g.enemies = [e];
+    g.world.colliders.push({ x: 0, z: 5, hx: 0.3, hz: 0.06 });
+    g.updatePlayer(0);
+    expect(g.bulletStop.z).toBeCloseTo(4.94);
+    expect(g.fire()).toBe(true);
+    g.updateBullets(0.1);
+    expect(e.hp).toBe(e.maxHp);
+    expect(g.hits).toBe(0);
+    expect(g.bullets).toHaveLength(0);
+  });
+
+  it.each([20, 30, 60, 120])('Qwen 在 %s FPS 下连射一秒结算 13 次', (fps) => {
+    const g = subscribed('qwen');
+    g.padAim = { x: 0, z: 1 };
+    g.mouse.down = true;
+    for (let i = 0; i < fps; i++) g.updatePlayer(1 / fps);
+    expect(g.calls).toBe(13);
+    expect(g.tokensUsed).toBe(13 * 32);
+    g.mouse.down = false;
+    g.updatePlayer(0.5);
+    g.mouse.down = true;
+    g.updatePlayer(1 / fps);
+    expect(g.calls).toBe(14);
+  });
+
+  it('GPT 激光直射：不生成弹体、即时命中、落点环隐藏', () => {
+    const g = subscribed('gpt'); g.state = 'playing';
+    const e = enemy('brawler'); e.pos.set(0, 0, 8); g.enemies.push(e);
+    g.aimPoint.set(0, 0.8, 20);
+    const hp = e.hp; g.p.fireT = 0;
+    expect(g.fire()).toBe(true);
+    expect(g.bullets.length).toBe(0);
+    expect(e.hp).toBeLessThan(hp);
+    expect(g.hits).toBe(1);
+    expect(g.impactMarker.visible).toBe(false);
+  });
+
+  it('调休展开护盾罩与头顶护盾条，破盾后收起', () => {
+    const g = subscribed(); g.level = 3; g.recomputeLoadout();
+    g.castSkill(2);
+    g.updatePlayer(0.1);
+    expect(g.shieldDome.visible).toBe(true);
+    expect(g.playerHpBar.shieldFill.visible).toBe(true);
+    expect(g.playerHpBar.shieldFill.scale.x).toBeCloseTo(1.42);
+    g.p.iframes = 0;
+    g.damagePlayer(g.p.shield + 10);
+    g.updatePlayer(0.1);
+    expect(g.shieldDome.visible).toBe(false);
+    expect(g.playerHpBar.shieldFill.visible).toBe(false);
+  });
+
+  it('996 期间鸭鸭切换狂热红色，结束还原', () => {
+    const g = subscribed(); g.level = 6; g.recomputeLoadout();
+    g.castSkill(3);
+    g.updatePlayer(0.1);
+    expect(g.playerDuck.setRage).toHaveBeenCalledWith(true);
+    g.p.rageT = 0;
+    g.updatePlayer(0.1);
+    expect(g.playerDuck.setRage).toHaveBeenCalledWith(false);
+  });
+
+  it('996 燃烧扣血且抑制脱战回血，击杀续命封顶', () => {
+    const g = subscribed(); g.level = 6; g.recomputeLoadout();
+    g.castSkill(3);
+    const hp0 = g.p.hp, t0 = g.p.rageT;
+    g.updatePlayer(1);
+    expect(g.p.hp).toBeCloseTo(hp0 - rules.SKILL_TUNING.rageBurnPerSec, 5);
+    expect(g.p.rageT).toBeCloseTo(t0 - 1, 5);
+    for (let i = 0; i < 10; i++) { const e = enemy('brawler', 1); g.enemies = [e]; g.killEnemy(e); }
+    expect(g.p.rageExtended).toBe(rules.SKILL_TUNING.rageExtendCap);
+    expect(g.p.rageT).toBeCloseTo(t0 - 1 + rules.SKILL_TUNING.rageExtendCap, 5);
+  });
+
+  it('996 烧死属于自我消耗：不走护盾，也不触发不死鸟', () => {
+    const g = subscribed(); g.level = 6; g.cards = { g_phoenix: 1 }; g.recomputeLoadout();
+    g.p.hp = 1; g.p.shield = 100;
+    g.castSkill(3);
+    g.updatePlayer(1);
+    expect(g.state).toBe('over');
+    expect(g.p.hp).toBe(0);
+    expect(g.phoenixUsed).toBe(false);
+    expect(g.p.shield).toBe(100);
+  });
+
+  it('卷王模式期间击杀经验 ×1.5，敌人攻击/开火计时暂停但仍减速移动', () => {
+    const g = subscribed(); g.level = 9; g.recomputeLoadout();
+    g.nextWave(); g.spawnQueue = [];
+    g.castSkill(4);
+    const e = enemy('brawler', 1); g.enemies = [e];
+    const xp0 = g.xpEarned;
+    g.killEnemy(e);
+    expect(g.xpEarned - xp0).toBe(Math.round(rules.xpForKill('brawler', false) * g.loadout.xpMul * rules.SKILL_TUNING.grindXpMul));
+    const e2 = enemy('brawler', 100); e2.pos.set(0, 0, 1.2); e2.reach = 0; g.enemies = [e2];
+    const fireT = e2.fireT, attackT = e2.attackT;
+    g.updateEnemies(0.5);
+    expect(e2.fireT).toBe(fireT);
+    expect(e2.attackT).toBe(attackT);
+    expect(g.slowT).toBeGreaterThan(0);
+  });
+
+  it('释放技能鸭鸭头顶喊话，短语取自技能短语表且跟随玩家', () => {
+    const g = subscribed();
+    g.castSkill(1);
+    expect(g.fx.shout).toHaveBeenCalledTimes(1);
+    const [text, anchor] = g.fx.shout.mock.calls[0];
+    expect(rules.SKILL_SHOUTS.storm).toContain(text);
+    expect(anchor).toBe(g.p.pos);
+  });
+
+  it('加班炸弹落地才爆炸：范围伤害+定身，圈外不受影响，击杀结算加班费', () => {
+    const g = subscribed();
+    g.aimPoint.set(0, 0, 0);
+    const near = enemy('brawler', 1); near.pos.set(1, 0, 1);
+    const tank = enemy('brawler', 500); tank.pos.set(2, 0, 0);
+    const far = enemy('brawler', 100); far.pos.set(12, 0, 12);
+    g.enemies = [near, tank, far];
+    const before = g.coins;
+    g.castSkill(1);
+    expect(g.bombs).toHaveLength(1);
+    expect(near.dead).toBe(false);
+    g.updateBombs(0.3);
+    expect(g.bombs).toHaveLength(1);
+    g.updateBombs(0.4);
+    expect(g.bombs).toHaveLength(0);
+    expect(near.dead).toBe(true);
+    expect(g.coins).toBe(before + Math.round(rules.coinsFor('brawler', false) * g.loadout.coinMul) + rules.SKILL_TUNING.overtimeCoins);
+    expect(tank.hp).toBe(500 - g.loadout.storm.damage);
+    expect(tank.rootT).toBe(rules.SKILL_TUNING.overtimeRootSec);
+    expect(far.hp).toBe(100);
+    expect(far.rootT).toBe(0);
+  });
+
+  it('加班炸弹按准星投掷，不会跟随 Claude 的追踪落点', () => {
+    const g = subscribed('claude');
+    g.p.pos.set(0, 0, 0);
+    g.padAim = { x: 0, z: 1 };
+    const e = enemy();
+    e.pos.set(3, 0, 9);
+    g.enemies = [e];
+    g.updatePlayer(0);
+    expect(g.bulletStop.x).toBeCloseTo(3);
+    g.castSkill(1);
+    expect(g.bombs[0].target.x).toBeCloseTo(0);
+    expect(g.bombs[0].target.z).toBeCloseTo(10);
+  });
+
+  it('加班定身期间敌人原地罚站，到期自动解除', () => {
+    const g = subscribed(); g.nextWave(); g.spawnQueue = [];
+    const e = enemy('brawler', 100); e.pos.set(0, 0, 6); e.reach = 0; g.enemies = [e];
+    g.rootEnemy(e);
+    const x0 = e.pos.x, z0 = e.pos.z;
+    g.updateEnemies(1);
+    expect(e.pos.x).toBeCloseTo(x0, 5);
+    expect(e.pos.z).toBeCloseTo(z0, 5);
+    expect(e.rootT).toBe(rules.SKILL_TUNING.overtimeRootSec - 1);
+    g.updateEnemies(rules.SKILL_TUNING.overtimeRootSec);
+    expect(e.rootT).toBe(0);
   });
 });

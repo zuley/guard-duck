@@ -304,9 +304,9 @@ try {
   const tokenUse = await ev(`(() => { const g = window.__game;
     const before = { wallet: g.walletMicros, tokens: g.tokens, used: g.tokensUsed, calls: g.calls };
     g.p.fireT = 0; g.fire(); return { before, tokens: g.tokens, used: g.tokensUsed, calls: g.calls, wallet: g.walletMicros }; })()`);
-  check('C9c', 'Token 优化真实选卡后，每次调用用量向上取整为 29，未产生换弹',
-    /Token\s*优化/.test(tokenCard.name) && tokenUse.tokens === tokenUse.before.tokens - 29
-    && tokenUse.used === tokenUse.before.used + 29 && tokenUse.calls === tokenUse.before.calls + 1
+  check('C9c', 'Token 优化真实选卡后，DS 单次调用向上取整为 10 Token',
+    /Token\s*优化/.test(tokenCard.name) && tokenUse.tokens === tokenUse.before.tokens - 10
+    && tokenUse.used === tokenUse.before.used + 10 && tokenUse.calls === tokenUse.before.calls + 1
     && tokenUse.wallet === tokenUse.before.wallet, JSON.stringify({ card: tokenCard, tokenUse }));
   const budgetBefore = await ev('({ wallet: window.__game.walletMicros, earned: window.__game.coinsEarned })');
   const budgetCard = await pickKnown('c_ammo');
@@ -316,11 +316,11 @@ try {
     const repeated = { wallet: g.walletMicros, earned: g.coinsEarned };
     g.tokens = 0; g.p.fireT = 0; const quote = g.usageQuote(); g.fire();
     return { picked, repeated, wallet: g.walletMicros, tokens: g.tokens, quote }; })()`);
-  check('C9d', '预算补贴只即时发放一次 30 金币，之后仅按量单价打九折（29 Token 扣 0.254475）',
+  check('C9d', '预算补贴只即时发放一次 30 刀，之后仅按量单价打九折（10 Token 扣 0.08775）',
     budgetCard.name.includes('预算补贴') && budget.picked.wallet === budgetBefore.wallet + 30_000_000
     && budget.picked.earned === budgetBefore.earned + 30 && budget.repeated.wallet === budget.picked.wallet
-    && budget.repeated.earned === budget.picked.earned && budget.quote.tokens === 29 && budget.quote.rateMicros === 8775
-    && budget.quote.costMicros === 254475 && budget.wallet === budget.picked.wallet - 254475 && budget.tokens === 0,
+    && budget.repeated.earned === budget.picked.earned && budget.quote.tokens === 10 && budget.quote.rateMicros === 8775
+    && budget.quote.costMicros === 87750 && budget.wallet === budget.picked.wallet - 87750 && budget.tokens === 0,
     JSON.stringify({ card: budgetCard, budgetBefore, budget }));
   const cashbackCard = await pickKnown('r_ammoBack');
   const cashback = await ev(`(() => { const g = window.__game; window.__T.resolveDraft(); g.clearField(); __T.hold();
@@ -331,7 +331,7 @@ try {
     g.killEnemy(e); g.killEnemy(e); g.rng = rng;
     const out = { before, wallet: g.walletMicros, earned: g.coinsEarned, kills: g.kills, chance: g.loadout.mods.cashback };
     window.__T.resolveDraft(); g.clearField(); __T.hold(); return out; })()`);
-  check('C9e', '消费返现一层为 25% 几率 +4 金币，真实击杀只发一次基础工资与返现',
+  check('C9e', '消费返现一层为 25% 几率 +4 刀，真实击杀只发一次基础工资与返现',
     cashbackCard.name.includes('消费返现') && cashback.chance === 0.25
     && cashback.wallet === cashback.before.wallet + 12_000_000 && cashback.earned === cashback.before.earned + 12
     && cashback.kills === cashback.before.kills + 1, JSON.stringify({ card: cashbackCard, cashback }));
@@ -355,9 +355,10 @@ try {
     g.cards = {}; g.cardHistory = []; g.recomputeLoadout();
     g.cardDraft = ['g_chain', 'r_frost', 'c_dmg'].map(id => ({ ...CARD_BY_ID[id], stacks: 0, next: 1 }));
     g.state = 'card'; g.hud.cardOpen(true); g.hud.renderCards(g); return 1; })()`);
-  await sleep(1000);
-  const c11 = await ev(`(() => { const q = (r) => document.querySelector('#cardRow .pickCard.' + r);
+  const c11 = await ev(`(async () => { const q = (r) => document.querySelector('#cardRow .pickCard.' + r);
     const gold = q('gold'), rare = q('rare'), common = q('common');
+    const entrance = [gold, rare, common].flatMap(e => e.getAnimations().filter(a => a.animationName === 'dealIn'));
+    await Promise.race([Promise.all(entrance.map(a => a.finished)), new Promise(resolve => setTimeout(resolve, 5000))]);
     const cs = getComputedStyle(gold);
     return { goldBorder: cs.borderTopColor, rareBorder: getComputedStyle(rare).borderTopColor,
       commonBorder: getComputedStyle(common).borderTopColor,

@@ -245,18 +245,18 @@ export function rollDrop(rng, type, elite = false) {
   return rng() < 0.55 ? null : 'health';
 }
 
-// 打工人战利品：拾取即结算金币 + 一个即时效果（effect 字段供 game.js 派发）。
-// 稀有度越高金币越多、效果越强；weight 是掉落权重（越稀有越低）。
+// 打工人战利品：拾取即结算收益 + 一个即时效果（effect 字段供 game.js 派发）。
+// 稀有度越高刀越多、效果越强；weight 是掉落权重（越稀有越低）。
 export const LOOT_ITEMS = [
-  { id: 'subsidy', label: '高温补贴', coins: 6, weight: 14, color: 0xffb070, effect: { kind: 'heal', amount: 10 }, desc: '+6 金币 · 回血 10' },
-  { id: 'welfare', label: '节日福利', coins: 10, weight: 12, color: 0xff7ab8, effect: { kind: 'shield', amount: 20, cap: 120 }, desc: '+10 金币 · 护盾 +20（上限 120）' },
-  { id: 'salary', label: '本月工资', coins: 14, weight: 11, color: 0x7ee06a, effect: { kind: 'heal', amount: 25 }, desc: '+14 金币 · 回血 25' },
-  { id: 'coffee', label: '下午茶', coins: 8, weight: 12, color: 0xc89060, effect: { kind: 'haste', duration: 5 }, desc: '+8 金币 · 移速 +25% 5s' },
-  { id: 'overtime', label: '加班费', coins: 18, weight: 9, color: 0x9fe8ff, effect: { kind: 'xp', amount: 12 }, desc: '+18 金币 · 经验 +12' },
-  { id: 'performance', label: '季度绩效', coins: 24, weight: 7, color: 0x6fd6ff, effect: { kind: 'xp', amount: 30 }, desc: '+24 金币 · 经验 +30' },
-  { id: 'bonus', label: '项目奖金', coins: 32, weight: 5, color: 0xffd95e, effect: { kind: 'rage', duration: 4 }, desc: '+32 金币 · 红温 4s' },
-  { id: 'yearbonus', label: '年终奖', coins: 60, weight: 2, color: 0xffc63a, effect: { kind: 'heal', amount: 60 }, desc: '+60 金币 · 回血 60' },
-  { id: 'stock', label: '期权激励', coins: 88, weight: 1, color: 0xffe9a8, effect: { kind: 'fullheal' }, desc: '+88 金币 · 生命全满' },
+  { id: 'subsidy', label: '高温补贴', coins: 6, weight: 14, color: 0xffb070, effect: { kind: 'heal', amount: 10 }, desc: '+6 刀 · 回血 10' },
+  { id: 'welfare', label: '节日福利', coins: 10, weight: 12, color: 0xff7ab8, effect: { kind: 'shield', amount: 20, cap: 120 }, desc: '+10 刀 · 护盾 +20（上限 120）' },
+  { id: 'salary', label: '本月工资', coins: 14, weight: 11, color: 0x7ee06a, effect: { kind: 'heal', amount: 25 }, desc: '+14 刀 · 回血 25' },
+  { id: 'coffee', label: '下午茶', coins: 8, weight: 12, color: 0xc89060, effect: { kind: 'haste', duration: 5 }, desc: '+8 刀 · 移速 +25% 5s' },
+  { id: 'overtime', label: '加班费', coins: 18, weight: 9, color: 0x9fe8ff, effect: { kind: 'xp', amount: 12 }, desc: '+18 刀 · 经验 +12' },
+  { id: 'performance', label: '季度绩效', coins: 24, weight: 7, color: 0x6fd6ff, effect: { kind: 'xp', amount: 30 }, desc: '+24 刀 · 经验 +30' },
+  { id: 'bonus', label: '项目奖金', coins: 32, weight: 5, color: 0xffd95e, effect: { kind: 'rage', duration: 4 }, desc: '+32 刀 · 996 4s' },
+  { id: 'yearbonus', label: '年终奖', coins: 60, weight: 2, color: 0xffc63a, effect: { kind: 'heal', amount: 60 }, desc: '+60 刀 · 回血 60' },
+  { id: 'stock', label: '期权激励', coins: 88, weight: 1, color: 0xffe9a8, effect: { kind: 'fullheal' }, desc: '+88 刀 · 生命全满' },
 ];
 
 export function coinsFor(type, elite = false) {
@@ -333,10 +333,10 @@ export const CARDS = [
   { id: 'c_armor', rarity: 'common', name: '硬羽绒', icon: '甲', max: 3, tag: '生存', desc: (n) => `受到伤害 -${[0, 12, 22, 30][n]}%` },
   { id: 'c_spread', rarity: 'common', name: '稳如老鸭', icon: '稳', max: 3, tag: '火力', desc: (n) => `子弹散布 -${[0, 22, 38, 50][n]}%` },
   { id: 'c_regen', rarity: 'common', name: '自愈绒毛', icon: '愈', max: 3, tag: '生存', desc: (n) => `脱战回血 ${4 + 3 * n}/秒` },
-  { id: 'c_coin', rarity: 'common', name: '财迷鸭', icon: '财', max: 3, tag: '收益', desc: (n) => `击杀金币 +${25 * n}%` },
+  { id: 'c_coin', rarity: 'common', name: '财迷鸭', icon: '财', max: 3, tag: '收益', desc: (n) => `击杀收益 +${25 * n}%` },
   { id: 'c_xp', rarity: 'common', name: '好学鸭', icon: '学', max: 3, tag: '收益', desc: (n) => `获得经验 +${25 * n}%` },
   { id: 'c_range', rarity: 'common', name: '加长枪管', icon: '远', max: 3, tag: '火力', desc: (n) => `射程 +${18 * n}% · 衰减后移` },
-  { id: 'c_ammo', rarity: 'common', name: '预算补贴', icon: '预', max: 3, tag: '经济', desc: (n) => `获得时 +30 金币 · 按量单价 -${10 * n}%（不减订阅费）` },
+  { id: 'c_ammo', rarity: 'common', name: '预算补贴', icon: '预', max: 3, tag: '经济', desc: (n) => `获得时 +30 刀 · 按量单价 -${10 * n}%（不减订阅费）` },
 
   // ---- 稀有（绿）：附带特效 ----
   { id: 'r_explosive', rarity: 'rare', name: '爆破弹', icon: '爆', max: 3, tag: '特效', desc: (n) => `命中引爆：半径 ${(2 + 0.4 * n).toFixed(1)} 造成 ${35 + 10 * n}% 溅射伤害` },
@@ -350,7 +350,7 @@ export const CARDS = [
   { id: 'r_dashBlast', rarity: 'rare', name: '铁头冲撞', icon: '撞', max: 2, tag: '特效', desc: (n) => `冲刺撞击造成 ${30 * n} 伤害并强力击退` },
   { id: 'r_burn', rarity: 'rare', name: '燃烧弹', icon: '燃', max: 2, tag: '特效', desc: (n) => `命中点燃：${8 * n} 伤害/秒，持续 3s` },
   { id: 'r_magnet', rarity: 'rare', name: '拾取磁铁', icon: '磁', max: 2, tag: '特效', desc: (n) => `拾取范围 ×${(1 + 1.4 * n).toFixed(1)} · 每次拾取回血 ${4 * n}` },
-  { id: 'r_ammoBack', rarity: 'rare', name: '消费返现', icon: '返', max: 2, tag: '经济', desc: (n) => `击杀有 ${25 * n}% 概率额外获得 4 金币` },
+  { id: 'r_ammoBack', rarity: 'rare', name: '消费返现', icon: '返', max: 2, tag: '经济', desc: (n) => `击杀有 ${25 * n}% 概率额外获得 4 刀` },
 
   // ---- 传说（金）：最强特效 ----
   { id: 'g_chain', rarity: 'gold', name: '连锁闪电', icon: '链', max: 2, tag: '传说', desc: (n) => `命中电击弹射 ${n + 1} 个附近敌人，各受 ${60 + 15 * n}% 伤害` },
@@ -360,9 +360,9 @@ export const CARDS = [
   { id: 'g_berserk', rarity: 'gold', name: '血怒', icon: '怒', max: 2, tag: '传说', desc: (n) => `生命越低伤害越高，残血时最高 +${50 + 20 * n}%` },
   { id: 'g_multishot', rarity: 'gold', name: '双管齐下', icon: '双', max: 2, tag: '传说', desc: (n) => `每次射击额外发射 ${n} 发平行子弹` },
   { id: 'g_guardian', rarity: 'gold', name: '守护结界', icon: '界', max: 2, tag: '传说', desc: (n) => `每 ${n > 1 ? 6 : 9} 秒自动完全抵挡一次伤害` },
-  { id: 'g_goldRush', rarity: 'gold', name: '点金术', icon: '金', max: 2, tag: '传说', desc: (n) => `击杀金币 ×${1 + n} · 击杀额外掉落打工人福利` },
+  { id: 'g_goldRush', rarity: 'gold', name: '点金术', icon: '金', max: 2, tag: '传说', desc: (n) => `击杀收益 ×${1 + n} · 击杀额外掉落打工人福利` },
   { id: 'g_timeKill', rarity: 'gold', name: '时停收割', icon: '停', max: 2, tag: '传说', desc: (n) => `击杀有 ${12 + 8 * n}% 概率触发全场减速 ${(1.2 + 0.4 * n).toFixed(1)}s` },
-  { id: 'g_storm', rarity: 'gold', name: '乱杀精通', icon: '杀', max: 3, tag: '传说', desc: (n) => `「嘎嘎乱杀」伤害 +${40 * n} · 半径 +${(1.2 * n).toFixed(1)} · 冷却 -${15 * n}%` },
+  { id: 'g_storm', rarity: 'gold', name: '乱杀精通', icon: '杀', max: 3, tag: '传说', desc: (n) => `「加班」伤害 +${5 * n} · 半径 +${2 * n} · 冷却 -${15 * n}%` },
 ];
 
 export const CARD_BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));
@@ -440,12 +440,11 @@ export function cardEffects(owned = {}, level = 1) {
     rangeMul: 1 + 0.18 * r('c_range'),
     meteredCostMul: Math.max(0.01, 1 - 0.1 * r('c_ammo')),
     killHeal: 6 * r('r_killheal'),
-    // 技能解锁只看等级（开局1个，每3级+1）；金卡「乱杀精通」强化乱杀数值
+    // 技能解锁只看等级（开局1个，每3级+1）；金卡「乱杀精通」强化加班数值
     skills: skillsForLevel(level),
     storm: {
-      damage: 60 + 40 * r('g_storm'),
-      radius: 4.5 + 1.2 * r('g_storm'),
-      knock: 6,
+      damage: 10 + 5 * r('g_storm'),
+      radius: 9 + 2 * r('g_storm'),
       cdMul: 1 - 0.15 * r('g_storm'),
     },
     shield: { pool: 80, duration: 6 },
@@ -456,13 +455,32 @@ export function cardEffects(owned = {}, level = 1) {
 }
 
 export const SKILLS = [
-  { id: 'storm', key: 1, label: '嘎嘎乱杀', icon: '嘎', cd: 12 },
-  { id: 'shield', key: 2, label: '抱头蹲防', icon: '蹲', cd: 18 },
-  { id: 'rage', key: 3, label: '红温暴走', icon: '温', cd: 20 },
-  { id: 'slow', key: 4, label: '嘎瓦鲁多', icon: '停', cd: 22 },
+  { id: 'storm', key: 1, label: '加班', icon: '班', cd: 12 },
+  { id: 'shield', key: 2, label: '调休', icon: '休', cd: 18 },
+  { id: 'rage', key: 3, label: '996', icon: '6', cd: 20 },
+  { id: 'slow', key: 4, label: '卷王模式', icon: '卷', cd: 22 },
 ];
 
-// 技能随等级解锁：开局 1 个（嘎嘎乱杀），之后每 3 级 +1，Lv.9 四技能齐。
+// 释放技能时鸭鸭头顶的喊话气泡短语
+export const SKILL_SHOUTS = {
+  storm: ['加班了兄弟们！', '都别走，开干！', '今晚谁也别想下班！'],
+  shield: ['调休！谁也别找我！', '假期保命中！'],
+  rage: ['996 是福报！', '燃烧吧，工魂！'],
+  slow: ['一起卷！都别动！', '卷死你们！'],
+};
+
+// 打工人技能经济钩子：加班费按人头结算、加班炸弹定身、996 烧命换输出、卷王期间经验加成。
+export const SKILL_TUNING = {
+  overtimeCoins: 8,
+  overtimeRootSec: 3,
+  rageBurnPerSec: 3,
+  rageKillExtend: 0.5,
+  rageExtendCap: 3,
+  rageMoveMul: 1.15,
+  grindXpMul: 1.5,
+};
+
+// 技能随等级解锁：开局 1 个（加班），之后每 3 级 +1，Lv.9 四技能齐。
 // requiredLevel 是唯一来源：解锁判定、HUD 锁定标签、未解锁提示都从它推导。
 export const SKILL_EVERY_LEVELS = 3;
 for (let i = 0; i < SKILLS.length; i++) SKILLS[i].requiredLevel = i === 0 ? 1 : i * SKILL_EVERY_LEVELS;
@@ -518,13 +536,27 @@ export function raySphereT(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
   return t > 0 ? t : -1;
 }
 
+// 从 (x - dx, z - dz) 到 (x, z) 的线段是否触到目标圆形边缘。
+export function segmentTouchesCircle(x, z, dx, dz, cx, cz, radius) {
+  const t = Math.max(0, Math.min(1, ((x - cx) * dx + (z - cz) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(x - t * dx - cx, z - t * dz - cz) <= radius;
+}
+
 // 沿单位方向步进模拟弹道，返回首个命中点（敌人 / 掩体 / 地面）或射程末端
-export function marchImpact(origin, dir, range, targets, isBlocked, groundAt, step = 0.5) {
-  let x = origin.x, y = origin.y, z = origin.z;
-  for (let d = 0; d < range; d += step) {
-    x += dir.x * step; y += dir.y * step; z += dir.z * step;
+export function marchImpact(origin, dir, range, targets, isBlocked, groundAt, step = 0.5, sweep = false, canHit) {
+  let { x, y, z } = origin;
+  for (let d = 0; d < range;) {
+    const next = Math.min(d + step, range);
+    const stride = next - d;
+    d = next;
+    x = origin.x + dir.x * d;
+    y = origin.y + dir.y * d;
+    z = origin.z + dir.z * d;
     for (const t of targets) {
-      if (Math.hypot(x - t.x, z - t.z) < t.radius && y < t.height) return { x, y, z, hit: 'enemy' };
+      const hit = sweep
+        ? y >= t.minY && y <= t.height && segmentTouchesCircle(x, z, dir.x * stride, dir.z * stride, t.x, t.z, t.radius)
+        : y < t.height && Math.hypot(x - t.x, z - t.z) < t.radius;
+      if (hit && (!canHit || canHit(t))) return { x, y, z, hit: 'enemy' };
     }
     if (y < 1.8 && isBlocked(x, z)) return { x, y, z, hit: 'wall' };
     if (y <= groundAt(x, z) + 0.04) return { x, y, z, hit: 'ground' };

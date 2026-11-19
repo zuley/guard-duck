@@ -71,7 +71,7 @@ async function renderCards() {
       document.addEventListener('DOMContentLoaded', () => {
         const captions = {
           1: { title: '调用与生存', sub: '每次基础 32 Token · 齐射只计一次 · 旧额度不跨波' },
-          2: { title: '主动技能', sub: '按等级解锁 · 独立冷却 · 不消耗 Token 或金币' },
+          2: { title: '主动技能', sub: '按等级解锁 · 独立冷却 · 不消耗 Token 或刀' },
           3: { title: '波次强化卡', sub: '每波三选一 · 普通 / 稀有 / 传说 · 经济卡可叠层' },
           4: { title: '订阅与保护', sub: 'Claude / GPT / Qwen / GLM / DS · 按波续订 · 切换立即全额收费' },
         };

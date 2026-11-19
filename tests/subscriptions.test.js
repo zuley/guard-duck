@@ -9,7 +9,7 @@ import { computeLoadout, applyCards, cardEffects } from '../src/rules.js';
 
 const prices = [
   ['claude', 150, 1250, 160, 160000],
-  ['gpt', 60, 1000, 80, 80000],
+  ['gpt', 120, 2000, 80, 80000],
   ['qwen', 45, 1200, 50, 50000],
   ['glm', 44, 1600, 36.5, 36500],
   ['ds', 15, 2000, 9.75, 9750],
@@ -26,7 +26,7 @@ describe('五计划与有日期的独立参考', () => {
 
   it.each(prices)('%s 的统一公式给出准确费用/额度/微金币单价', (id, fee, quota, coinsPerK, rate) => {
     const plan = getPlan(id);
-    expect(plan).toMatchObject({ id, fee, quota, coinsPerK, tokenPriceMicros: rate, tokensPerCall: id === 'claude' ? 100 : 32 });
+    expect(plan).toMatchObject({ id, fee, quota, coinsPerK, tokenPriceMicros: rate, tokensPerCall: { claude: 64, ds: 11 }[id] ?? 32 });
     expect(pricingFromReference(plan.reference.inputUsd, plan.reference.outputUsd, quota)).toMatchObject({ fee, coinsPerK, tokenPriceMicros: rate });
     expect(quoteSubscription(id)).toEqual({ feeMicros: fee * MICROCOINS_PER_COIN, quota });
     expect(plan.reference.date).toBe(REFERENCE_DATE);
@@ -61,7 +61,7 @@ describe('五计划与有日期的独立参考', () => {
 });
 
 describe('整数微金币与原子 Token 报价', () => {
-  it('金币转换保留小额精度，显示不会把有效小额余额藏成 0', () => {
+  it('刀转换保留小额精度，显示不会把有效小额余额藏成 0', () => {
     expect(MICROCOINS_PER_COIN).toBe(1_000_000);
     for (const coins of [0, 0.000001, 0.312, 1.168, 5.12, 180]) expect(microsToCoins(coinsToMicros(coins))).toBe(coins);
     expect(formatCoins(0.312)).toBe('0.312');
@@ -73,7 +73,7 @@ describe('整数微金币与原子 Token 报价', () => {
     for (const invalid of [-1, NaN, Infinity, 0.1, '1', Number.MAX_SAFE_INTEGER + 1]) expect(() => microsToCoins(invalid)).toThrow();
   });
 
-  it.each(prices)('%s 全额度内一次调用只用套餐 Token，不花钱包金币', (id) => {
+  it.each(prices)('%s 全额度内一次调用只用套餐 Token，不花钱包余额', (id) => {
     const tpc = PLANS[id].tokensPerCall;
     expect(settleInvocation(0, 100, id)).toMatchObject({
       tokens: tpc, includedTokens: tpc, meteredTokens: 0, costMicros: 0,
@@ -83,21 +83,22 @@ describe('整数微金币与原子 Token 报价', () => {
 
   it.each(prices)('%s 超额/混合部分逐 Token 精确计价', (id, _fee, _quota, _coinsPerK, rate) => {
     const tpc = PLANS[id].tokensPerCall;
+    const part = Math.min(20, tpc - 1);
     expect(quoteUsage(id, 0)).toMatchObject({ tokens: tpc, includedTokens: 0, meteredTokens: tpc, costMicros: tpc * rate });
-    const charged = settleInvocation(tpc * rate, 20, id);
-    expect(charged).toMatchObject({ includedTokens: 20, meteredTokens: tpc - 20, costMicros: (tpc - 20) * rate, walletMicros: 20 * rate, remainingTokens: 0 });
-    expect(settleInvocation((tpc - 20) * rate - 1, 20, id)).toBeNull();
+    const charged = settleInvocation(tpc * rate, part, id);
+    expect(charged).toMatchObject({ includedTokens: part, meteredTokens: tpc - part, costMicros: (tpc - part) * rate, walletMicros: part * rate, remainingTokens: 0 });
+    expect(settleInvocation((tpc - part) * rate - 1, part, id)).toBeNull();
   });
 
   it('余额与部分额度凑不够时整笔拒绝，原输入状态不变', () => {
-    const state = Object.freeze({ walletMicros: 116999, tokens: 20 });
+    const state = Object.freeze({ walletMicros: 9749, tokens: 10 });
     expect(settleInvocation(state.walletMicros, state.tokens, 'ds')).toBeNull();
-    expect(state).toEqual({ walletMicros: 116999, tokens: 20 });
-    expect(settleInvocation(117000, 20, 'ds')).toMatchObject({ walletMicros: 0, remainingTokens: 0, costMicros: 117000 });
+    expect(state).toEqual({ walletMicros: 9749, tokens: 10 });
+    expect(settleInvocation(9750, 10, 'ds')).toMatchObject({ walletMicros: 0, remainingTokens: 0, costMicros: 9750 });
   });
 
-  it('一万次 DS 按量调用精确扣完3120金币，无累计浮点欠费', () => {
-    let balance = coinsToMicros(3120);
+  it('一万次 DS 按量调用精确扣完1072.5刀，无累计浮点欠费', () => {
+    let balance = coinsToMicros(1072.5);
     for (let i = 0; i < 10000; i++) {
       const paid = settleInvocation(balance, 0, 'ds');
       expect(paid).not.toBeNull();
@@ -124,7 +125,7 @@ describe('整数微金币与原子 Token 报价', () => {
   it('四张经济卡分别控制用量/下次额度/按量折扣/返现，无弹药属性', () => {
     for (let n = 0; n <= 3; n++) {
       const lo = applyCards(computeLoadout('ds'), cardEffects({ c_reload: n, c_mag: n, c_ammo: n }));
-      expect(quoteUsage('ds', 0, lo).tokens).toBe([32, 29, 26, 23][n]);
+      expect(quoteUsage('ds', 0, lo).tokens).toBe([11, 10, 9, 8][n]);
       expect(quoteUsage('ds', 0, lo).rateMicros).toBe([9750, 8775, 7800, 6825][n]);
       expect(quoteSubscription('ds', lo)).toEqual({ quota: 2000 + 500 * n, feeMicros: 15_000_000 });
       for (const old of ['magSize', 'reloadTime', 'ammoPickupMul']) expect(lo).not.toHaveProperty(old);
@@ -148,7 +149,7 @@ describe('四种虚构保护物品与封号下限', () => {
     for (const id of ['__proto__', 'constructor', 'toString', 'missing', null, {}]) expect(getProtection(id)).toBeNull();
   });
 
-  it('Claude/GPT 基础风险相差10倍，叠加有正数地板，其他计划永远为0', () => {
+  it('Claude/GPT 基础风险相差 100 倍，叠加有正数地板，其他计划永远为 0', () => {
     expect(banChance('claude')).toBe(0.05);
     expect(banChance('gpt')).toBe(0.0005);
     expect(banChance('claude', { us_phone: Array(13).fill(99) })).toBeGreaterThan(0.0025);

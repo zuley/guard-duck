@@ -43,6 +43,24 @@ function duckMaterial(color, rim) {
 }
 const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
+// 996 狂热红色变体：按原材质缓存独立副本，避免污染共享的正常材质
+const rageCache = new Map();
+function rageVariant(mat) {
+  let m = rageCache.get(mat);
+  if (!m) {
+    // 在 sRGB 空间混色：线性空间 lerp 会残留过多绿通道，红色发橙
+    const c = mat.color.clone().convertLinearToSRGB();
+    c.lerp(new THREE.Color(0xc22010).convertLinearToSRGB(), 0.85);
+    m = new THREE.MeshStandardMaterial({
+      color: c.convertSRGBToLinear(),
+      roughness: mat.roughness ?? 0.6, metalness: mat.metalness ?? 0,
+      emissive: 0x7a1005, emissiveIntensity: 0.5,
+    });
+    rageCache.set(mat, m);
+  }
+  return m;
+}
+
 const lerpAngle = (a, b, t) => {
   let d = (b - a) % (Math.PI * 2);
   if (d > Math.PI) d -= Math.PI * 2;
@@ -365,6 +383,26 @@ export class Duck {
   }
 
   kick() { this.recoil = 1; }
+
+  // 枪械部件保持原色，只染鸭身；关闭时换回共享的正常材质
+  setRage(on) {
+    if (on === !!this._rage) return;
+    this._rage = on;
+    if (!this._gunMeshes) {
+      this._gunMeshes = new Set();
+      if (this.gun) this.gun.traverse((o) => this._gunMeshes.add(o));
+    }
+    this.group.traverse((o) => {
+      if (!o.isMesh || o === this.blob || this._gunMeshes.has(o)) return;
+      if (on) {
+        o.userData.baseMat = o.material;
+        o.material = rageVariant(o.material);
+      } else if (o.userData.baseMat) {
+        o.material = o.userData.baseMat;
+        delete o.userData.baseMat;
+      }
+    });
+  }
 
   die() { this.deathT = 0; }
 

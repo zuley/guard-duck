@@ -137,3 +137,21 @@ describe('保护芯片提示持续与剩余波次', () => {
     expect(chip.children.at(-1).textContent).toBe('×1');
   });
 });
+
+it('强化图鉴随当前武器显示多重射击和穿甲特例', () => {
+  const { hud, container } = protectionHarness();
+  hud.el = { cardBookCount: {}, cardBookGrid: container };
+  hud.cardArt = vi.fn(() => ({}));
+  const game = { planId: 'qwen', cards: { g_multishot: 1, r_pierce: 1 }, cardHistory: ['g_multishot', 'r_pierce'] };
+  const descriptions = () => container.children.map(c => c.children[1].children[2].textContent);
+  hud.renderCardBook(game);
+  expect(descriptions()).toEqual([expect.stringContaining('固定发射一条'), expect.stringContaining('自带连续穿透')]);
+  container.children.length = 0;
+  game.planId = 'claude';
+  hud.renderCardBook(game);
+  expect(descriptions()).toEqual([expect.stringContaining('额外发射 1 发'), expect.stringContaining('导弹命中后引爆')]);
+  container.children.length = 0;
+  game.planId = 'gpt';
+  hud.renderCardBook(game);
+  expect(descriptions()).toEqual([expect.stringContaining('额外发射 1 发'), expect.stringContaining('穿透 1 个敌人')]);
+});

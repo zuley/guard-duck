@@ -275,7 +275,7 @@ try {
   }
   await evaluate('window.__game.mouse.down = false');
 
-  // ---- shotgun: GLM 五弹丸仅付一次基础 32 Token（保留慢动作标记） ----
+  // ---- shotgun: GLM 六弹丸仅付一次基础 32 Token（保留慢动作标记） ----
   stage = 'shotgun';
   await clearField();
   await evaluate('window.__game.coins = 2000');
@@ -425,7 +425,7 @@ try {
   await tapKey('KeyB', 66);
   await sleep(500);
 
-  // ---- benefits: 展示名称 / 实体，真实走近拾取并结算金币与即时效果 ----
+  // ---- benefits: 展示名称 / 实体，真实走近拾取并结算收益与即时效果 ----
   stage = 'benefits';
   await mark('benefits');
   await clearField();
@@ -549,7 +549,7 @@ try {
       document.body.appendChild(note);
       const captions = {
         1: ['调用与生存', ['每次基础32 Token', '齐射只计一次', '旧额度不跨波']],
-        2: ['主动技能', ['按等级解锁', '独立冷却', '零Token', '零金币']],
+        2: ['主动技能', ['按等级解锁', '独立冷却', '零Token', '零刀']],
         3: ['波次强化卡', ['肃清三选一', '普通稀有传说', '经济卡叠层']],
         4: ['订阅与保护', ['Claude / GPT / Qwen / GLM / DS', '按波续订', '切换全费']],
       };

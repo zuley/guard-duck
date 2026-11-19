@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { sparkSprite, puffSprite, featherSprite, flashSprite, ringSprite, scorchSprite, textTexture } from './textures.js';
+import { sparkSprite, puffSprite, featherSprite, bladeShardSprite, flashSprite, glowSprite, laserHaloTexture, ringSprite, scorchSprite, textTexture, shoutTexture } from './textures.js';
 import { groundHeight, waterSurfaceAt } from './world.js';
 
 const BILLBOARD_VERT = /* glsl */`
@@ -112,6 +112,7 @@ export class FX {
     this.scene = scene;
     this.smokePool = new BillboardPool(scene, 110, puffSprite(), 'smoke');
     this.featherPool = new BillboardPool(scene, 240, featherSprite('#ffffff'), 'feather');
+    this.bladeShardPool = new BillboardPool(scene, 96, bladeShardSprite(), 'shard');
 
     // 火花
     const N = this.sparkN = 500;
@@ -179,6 +180,25 @@ export class FX {
         map: ringSprite(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0 }));
       s.visible = false; scene.add(s);
       this.rings.push({ s, life: 0, max: 0 });
+    }
+    this.beams = [];
+    const coreGeo = new THREE.CylinderGeometry(1, 1, 1, 8).rotateX(Math.PI / 2);
+    const haloGeo = new THREE.PlaneGeometry(1, 1).rotateY(Math.PI / 2);
+    const laserBlend = { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false };
+    for (let i = 0; i < 12; i++) {
+      const group = new THREE.Group();
+      const core = new THREE.Mesh(coreGeo, new THREE.MeshBasicMaterial(laserBlend));
+      const halo = new THREE.Group();
+      const haloMaterial = new THREE.MeshBasicMaterial({ ...laserBlend, map: laserHaloTexture(), side: THREE.DoubleSide, forceSinglePass: true });
+      halo.add(new THREE.Mesh(haloGeo, haloMaterial), new THREE.Mesh(haloGeo, haloMaterial));
+      halo.children[1].rotation.z = Math.PI / 2;
+      const muzzle = new THREE.Sprite(new THREE.SpriteMaterial({ ...laserBlend, map: glowSprite() }));
+      const impact = new THREE.Sprite(muzzle.material.clone());
+      muzzle.position.z = -0.5;
+      group.add(core, halo, muzzle, impact);
+      group.visible = false;
+      scene.add(group);
+      this.beams.push({ group, core, halo, haloMaterial, muzzle, impact, life: 0, duration: 0.17 });
     }
     this.zones = [];
     const zoneRimGeo = new THREE.RingGeometry(0.94, 1, 48);
@@ -275,15 +295,29 @@ export class FX {
     }
   }
 
-  flash(pos, scale = 0.7) {
+  bladeShards(pos, dir, color) {
+    const tint = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.38);
+    for (let i = -2; i <= 2; i++) {
+      const side = i * 0.95;
+      this.bladeShardPool.spawn(
+        pos.x, pos.y, pos.z, dir.x * 5 + dir.z * side, 0.65 + Math.abs(i) * 0.45, dir.z * 5 - dir.x * side,
+        { life: 0.21 + Math.abs(i) * 0.035, size: 0.24, color: tint,
+          rot: i * 1.25, rotV: i * 4, grav: 4.2, drag: 2 });
+    }
+  }
+
+  flash(pos, scale = 0.7, color) {
     const f = this.flashes.find((x) => x.life <= 0) || this.flashes[0];
     f.s.position.copy(pos);
+    f.s.material.map = color === undefined ? flashSprite() : glowSprite();
+    f.s.material.color.set(color ?? 0xffffff);
     f.s.material.rotation = Math.random() * 6;
     f.s.scale.setScalar(scale * (0.8 + Math.random() * 0.5));
     f.s.visible = true;
     f.life = 0.06;
     const l = this.lights[this.lightIdx]; this.lightIdx = (this.lightIdx + 1) % this.lights.length;
     l.position.copy(pos);
+    l.color.set(color ?? 0xffb060);
     l.intensity = 22 * scale;
   }
 
@@ -305,6 +339,37 @@ export class FX {
     r.life = 0.4; r.max = max;
   }
 
+  beam(from, to, color, didImpact) {
+    const b = this.beams.find((x) => x.life <= 0) || this.beams[0];
+    const length = from.distanceTo(to);
+    b.group.position.copy(from).lerp(to, 0.5);
+    b.group.lookAt(to);
+    b.group.scale.z = length;
+    b.haloMaterial.color.set(color);
+    b.core.material.color.copy(b.haloMaterial.color).lerp(new THREE.Color(0xffffff), 0.76);
+    b.muzzle.material.color.copy(b.core.material.color);
+    b.impact.material.color.copy(b.core.material.color);
+    b.impact.position.z = 0.5 - Math.min(0.4, 0.12 / length);
+    b.impact.visible = didImpact;
+    b.life = b.duration;
+    b.group.visible = true;
+    this.updateBeam(b);
+  }
+
+  updateBeam(b) {
+    const fade = Math.max(0, b.life / b.duration);
+    const coreFade = fade ** 3;
+    b.core.material.opacity = coreFade;
+    b.core.scale.x = b.core.scale.y = 0.048 * (0.35 + 0.65 * fade);
+    b.haloMaterial.opacity = 0.72 * fade;
+    b.halo.scale.x = b.halo.scale.y = 0.42 + 0.27 * (1 - fade);
+    b.muzzle.material.opacity = 0.95 * coreFade;
+    b.muzzle.scale.setScalar(0.75 + 0.35 * (1 - fade));
+    b.impact.material.opacity = 0.9 * fade * fade;
+    b.impact.scale.setScalar(0.62 + 0.58 * (1 - fade));
+    b.group.visible = fade > 0;
+  }
+
   zone(pos, radius, color, life) {
     const z = this.zones.find((x) => x.life <= 0) || this.zones[0];
     z.g.position.set(pos.x, groundHeight(pos.x, pos.z) + 0.04, pos.z);
@@ -313,6 +378,25 @@ export class FX {
     z.disc.material.color.set(color);
     z.g.visible = true;
     z.life = z.max = life;
+  }
+
+  // 技能喊话气泡：跟随锚点（玩家 pos 引用），弹入 + 结束淡出
+  shout(text, anchor) {
+    if (!this.shoutSprite) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false, depthTest: false }));
+      s.renderOrder = 6;
+      s.visible = false;
+      this.scene.add(s);
+      this.shoutSprite = s;
+    }
+    const tex = shoutTexture(text);
+    const s = this.shoutSprite;
+    s.material.map = tex;
+    s.material.needsUpdate = true;
+    this.shoutAspect = tex.image.width / tex.image.height;
+    this.shoutAnchor = anchor;
+    this.shoutT = this.shoutDur = 1.8;
+    s.visible = true;
   }
 
   number(pos, text, color = '#ffe28a') {
@@ -330,6 +414,21 @@ export class FX {
   update(dt) {
     this.smokePool.update(dt);
     this.featherPool.update(dt);
+    this.bladeShardPool.update(dt);
+
+    if (this.shoutT > 0) {
+      this.shoutT = Math.max(0, this.shoutT - dt);
+      const s = this.shoutSprite;
+      if (this.shoutT <= 0) s.visible = false;
+      else {
+        const a = this.shoutAnchor;
+        s.position.set(a.x, a.y + 3.15, a.z);
+        const pop = Math.min(1, (this.shoutDur - this.shoutT) / 0.14);
+        const h = 0.6 * (0.7 + 0.3 * (1 - Math.pow(1 - pop, 3)));
+        s.scale.set(h * this.shoutAspect, h, 1);
+        s.material.opacity = Math.min(1, this.shoutT / 0.35);
+      }
+    }
 
     for (let i = 0; i < this.sparkN; i++) {
       if (this.sparkLife[i] <= 0) continue;
@@ -354,6 +453,12 @@ export class FX {
     }
     for (const b of this.bolts) {
       if (b.life > 0) { b.life -= dt; b.line.material.opacity = Math.max(0, b.life / 0.16); if (b.life <= 0) b.line.visible = false; }
+    }
+    for (const b of this.beams) {
+      if (b.life > 0) {
+        b.life -= dt;
+        this.updateBeam(b);
+      }
     }
     for (const l of this.lights) l.intensity = Math.max(0, l.intensity - dt * 220);
     for (const d of this.decals) {

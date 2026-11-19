@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Object3D, Vector3 } from 'three';
 import { Game } from '../src/game.js';
+import { Duck } from '../src/duck.js';
 import * as rules from '../src/rules.js';
 import { PLANS, STARTING_COINS } from '../src/subscriptions.js';
 import {
@@ -29,6 +30,7 @@ import {
   rollCards,
   cardEffects,
   SKILLS,
+  SKILL_TUNING,
   applyCards,
   ELITE,
   eliteHpMul,
@@ -55,7 +57,7 @@ function makeGameHarness({ subscribed = true } = {}) {
     state: 'weapons', t: 0, keys: new Set(), mouse: { down: false }, mouseFire: false,
     padAim: { x: 0, z: -1 }, rng: mulberry32(42), banRng: () => 1,
     enemies: [], pickups: [], orbitals: [], bullets: [], ebullets: [],
-    aimPoint: new Vector3(), impactPoint: new Vector3(), impactMarker: new Object3D(),
+    aimPoint: new Vector3(), bulletStop: new Vector3(), impactMarker: new Object3D(),
     world: { colliders: [], update: vi.fn() },
     engine: { scene: { add: vi.fn(), remove: vi.fn() }, addShake: vi.fn(), updateCamera: vi.fn() },
     hud: {
@@ -63,12 +65,14 @@ function makeGameHarness({ subscribed = true } = {}) {
       toast: vi.fn(), banner: vi.fn(), damage: vi.fn(),
     },
     audio: { uiClick: vi.fn(), pickup: vi.fn(), skillCast: vi.fn(), hit: vi.fn(), hurt: vi.fn(), waveHorn: vi.fn(), levelUp: vi.fn() },
-    fx: { ring: vi.fn(), number: vi.fn(), feathers: vi.fn(), update: vi.fn() },
+    fx: { ring: vi.fn(), number: vi.fn(), feathers: vi.fn(), update: vi.fn(), shout: vi.fn() },
     playerDuck: {
-      group: new Object3D(), update: vi.fn(),
+      group: new Object3D(), update: vi.fn(), setRage: vi.fn(),
       muzzleWorld: (out) => out.copy(game.p.pos).setY(0.75),
     },
-    playerHpBar: { group: new Object3D(), fill: new Object3D() },
+    playerHpBar: { group: new Object3D(), fill: new Object3D(), shieldBg: new Object3D(), shieldFill: new Object3D(), label: null, nameBaseY: 0 },
+    shieldDome: { visible: false, position: new Vector3(), scale: { setScalar: vi.fn() }, material: { uniforms: { uT: { value: 0 }, uFade: { value: 1 } } } },
+    domePop: 0,
     rebuildPlayerDuck: vi.fn(),
   });
   game.resetStats();
@@ -271,7 +275,7 @@ describe('精英强化单位', () => {
     expect(eliteHpMul(10)).toBeGreaterThan(eliteHpMul(1));
     expect(eliteHpMul(60)).toBeLessThanOrEqual(4);
   });
-  it('精英分值 / 金币 / 经验三倍', () => {
+  it('精英分值 / 刀 / 经验三倍', () => {
     expect(scoreFor('brawler', 1, true)).toBe(3 * scoreFor('brawler', 1));
     expect(coinsFor('rifle', true)).toBe(3 * coinsFor('rifle'));
     expect(xpForKill('heavy', true)).toBe(3 * xpForKill('heavy'));
@@ -344,14 +348,14 @@ describe('canEngage 开火规则', () => {
   });
 });
 
-describe('金币与打工人福利掉落', () => {
-  it('击杀金币随敌人阶层递增', () => {
+describe('刀与打工人福利掉落', () => {
+  it('击杀收益随敌人阶层递增', () => {
     expect(coinsFor('brawler')).toBeGreaterThan(0);
     expect(coinsFor('heavy')).toBeGreaterThan(coinsFor('rifle'));
     expect(coinsFor('rifle')).toBeGreaterThan(coinsFor('brawler'));
     expect(coinsFor('dragon')).toBe(0);
   });
-  it('9 种福利都有金币、权重、颜色与即时效果，不再有售价', () => {
+  it('9 种福利都有刀、权重、颜色与即时效果，不再有售价', () => {
     expect(LOOT_ITEMS.map((i) => i.id)).toEqual([
       'subsidy', 'welfare', 'salary', 'coffee', 'overtime', 'performance', 'bonus', 'yearbonus', 'stock',
     ]);
@@ -425,7 +429,7 @@ describe('五家订阅的战斗配装', () => {
     const loadout = computeLoadout();
     for (const key of ['damage', 'rpm', 'bulletSpeed']) expect(loadout[key]).toBe(WEAPON[key]);
     expect(loadout.gun).toBe(PLANS.ds);
-    expect(loadout.damage).toBe(34);
+    expect(loadout.damage).toBe(3);
     expect(loadout.range).toBe(42);
     for (const key of ['magSize', 'reloadTime', 'reserveStart']) {
       expect(loadout).not.toHaveProperty(key);
@@ -442,11 +446,12 @@ describe('五家订阅的战斗配装', () => {
     }
   });
   it('Claude 精准高伤、GPT 均衡、Qwen 高频、GLM 多弹丸、DS 低价长射程', () => {
-    expect(computeLoadout('claude')).toMatchObject({ damage: 100, rpm: 420, range: 54 });
-    expect(computeLoadout('gpt')).toMatchObject({ damage: 45, rpm: 600, range: 44 });
-    expect(computeLoadout('qwen')).toMatchObject({ damage: 21, rpm: 780, range: 34 });
-    expect(computeLoadout('glm')).toMatchObject({ damage: 17, rpm: 180, pellets: 5, range: 22 });
-    expect(computeLoadout('ds')).toMatchObject({ damage: 34, rpm: 480, range: 42 });
+    expect(computeLoadout('claude')).toMatchObject({ damage: 65, rpm: 420, range: 54, bulletSpeed: 23 });
+    expect(computeLoadout('gpt')).toMatchObject({ damage: 25, rpm: 600, range: 44 });
+    expect(computeLoadout('gpt').gun.spreadBase).toBe(0);
+    expect(computeLoadout('qwen')).toMatchObject({ damage: 6, rpm: 780, range: 34 });
+    expect(computeLoadout('glm')).toMatchObject({ damage: 5, rpm: 180, pellets: 6, range: 12, bulletSpeed: 9 });
+    expect(computeLoadout('ds')).toMatchObject({ damage: 3, rpm: 720, range: 42 });
   });
 });
 
@@ -466,8 +471,8 @@ describe('各订阅模型的距离衰减', () => {
     expect(precision / 100).toBeGreaterThanOrEqual(0.8);
   });
   it('GLM 散射衰减更快，定位近距爆发', () => {
-    const scatter = damageAtDistance(17, 15, PLANS.glm);
-    const standard = damageAtDistance(34, 15, PLANS.ds);
+    const scatter = damageAtDistance(17, 9, PLANS.glm);
+    const standard = damageAtDistance(34, 9, PLANS.ds);
     expect(scatter / 17).toBeLessThan(standard / 34);
   });
   it('缺省距离衰减与 DS 默认计划相同', () => {
@@ -478,19 +483,20 @@ describe('各订阅模型的距离衰减', () => {
 });
 
 describe('GLM 散射战斗定位', () => {
-  it('近距爆发：5 弹丸 × 17 伤害，一次调用而非逐弹计费', () => {
-    expect(PLANS.glm.pellets).toBe(5);
-    expect(PLANS.glm.damage).toBe(17);
+  it('近距爆发：6 弹丸 × 5 伤害，一次调用而非逐弹计费', () => {
+    expect(PLANS.glm.pellets).toBe(6);
+    expect(PLANS.glm.damage).toBe(5);
     expect(PLANS.glm.tokensPerCall).toBe(32);
-    expect(PLANS.glm.damage * PLANS.glm.pellets).toBe(85);
+    expect(PLANS.glm.damage * PLANS.glm.pellets).toBe(30);
   });
-  it('散布收紧且定义弹丸扩散角', () => {
-    expect(PLANS.glm.spreadBase).toBeLessThanOrEqual(0.04);
-    expect(PLANS.glm.pelletSpread).toBeLessThanOrEqual(0.12);
+  it('六颗气泡使用 45° 水平扇面', () => {
+    expect(PLANS.glm.spreadBase).toBeLessThanOrEqual(0.08);
+    expect(PLANS.glm.pelletSpread).toBeCloseTo(Math.PI / 4);
   });
-  it('持续 DPS 仍低于 Qwen 连发（定位区分）', () => {
-    const dps = (plan) => plan.damage * plan.pellets * plan.rpm / 60;
-    expect(dps(PLANS.glm)).toBeLessThan(dps(PLANS.qwen));
+  it('GLM 贴近时的全命中输出更高，到了射程边缘则低于 Qwen', () => {
+    const dps = (plan, distance) => damageAtDistance(plan.damage, distance, plan) * plan.pellets * plan.rpm / 60;
+    expect(dps(PLANS.glm, 2)).toBeGreaterThan(dps(PLANS.qwen, 2));
+    expect(dps(PLANS.glm, PLANS.glm.range)).toBeLessThan(dps(PLANS.qwen, PLANS.glm.range));
   });
 });
 
@@ -542,7 +548,7 @@ describe('Game 福利即时结算', () => {
     ['subsidy', 'hp', 20], ['welfare', 'shield', 20], ['salary', 'hp', 35], ['coffee', 'hasteT', 5],
     ['overtime', 'xpEarned', 12], ['performance', 'xpEarned', 30], ['bonus', 'rageT', 4],
     ['yearbonus', 'hp', 70], ['stock', 'hp', 100],
-  ])('拾取 %s 同时结算金币与 %s 效果，且只结算一次', (id, field, expected) => {
+  ])('拾取 %s 同时结算收益与 %s 效果，且只结算一次', (id, field, expected) => {
     const game = makeGameHarness(); const item = LOOT_ITEMS.find((i) => i.id === id);
     game.p.hp = 10; game.coins = 5; game.coinsEarned = 7;
     const mesh = queuePickup(game, 'loot', id);
@@ -854,7 +860,7 @@ describe('抽卡规则', () => {
 });
 
 describe('cardEffects 数值叠加', () => {
-  it('无卡为基准值，技能只随等级解锁（开局仅嘎嘎乱杀）', () => {
+  it('无卡为基准值，技能只随等级解锁（开局仅加班）', () => {
     const ef = cardEffects({});
     expect(ef.dmgBonus).toBe(1);
     expect(ef.maxHpBonus).toBe(0);
@@ -915,10 +921,10 @@ describe('cardEffects 数值叠加', () => {
   });
   it('金卡「乱杀精通」强化技能数值且缩短冷却', () => {
     const base = cardEffects({}, 10);
-    expect(base.storm.damage).toBe(60);
+    expect(base.storm.damage).toBe(10);
     const ef = cardEffects({ g_storm: 3 }, 10);
-    expect(ef.storm.damage).toBe(180);
-    expect(ef.storm.radius).toBeCloseTo(8.1);
+    expect(ef.storm.damage).toBe(25);
+    expect(ef.storm.radius).toBeCloseTo(15);
     expect(ef.storm.cdMul).toBeCloseTo(0.55);
   });
   it('卡牌不影响技能解锁等级', () => {
@@ -933,10 +939,24 @@ describe('SKILLS 主动技能表', () => {
     expect(SKILLS.map((s) => s.key)).toEqual([1, 2, 3, 4]);
     for (const s of SKILLS) expect(s.cd).toBeGreaterThan(0);
   });
+  it('打工人命名：加班 / 调休 / 996 / 卷王模式', () => {
+    expect(SKILLS.map((s) => s.label)).toEqual(['加班', '调休', '996', '卷王模式']);
+    expect(SKILLS.map((s) => s.icon)).toEqual(['班', '休', '6', '卷']);
+  });
+  it('经济钩子数值有界：加班费按人头、烧命有续命上限', () => {
+    expect(SKILL_TUNING.overtimeCoins).toBe(8);
+    expect(SKILL_TUNING.overtimeRootSec).toBe(3);
+    expect(SKILL_TUNING.rageBurnPerSec).toBe(3);
+    expect(SKILL_TUNING.rageKillExtend).toBe(0.5);
+    expect(SKILL_TUNING.rageExtendCap).toBe(3);
+    expect(SKILL_TUNING.rageMoveMul).toBeGreaterThan(1);
+    expect(SKILL_TUNING.grindXpMul).toBe(1.5);
+    expect(SKILL_TUNING.rageKillExtend).toBeLessThanOrEqual(SKILL_TUNING.rageExtendCap);
+  });
 });
 
 describe('skillsForLevel 技能随等级解锁', () => {
-  it('开局 1 个技能（嘎嘎乱杀）', () => {
+  it('开局 1 个技能（加班）', () => {
     expect(skillsForLevel(1)).toEqual({ storm: true, shield: false, rage: false, slow: false });
     expect(skillsForLevel(2)).toEqual({ storm: true, shield: false, rage: false, slow: false });
   });
@@ -1110,5 +1130,21 @@ describe('订阅模型射程', () => {
 
   it('射程不短于伤害衰减末端（衰减区间内仍有伤害）', () => {
     for (const plan of Object.values(PLANS)) expect(plan.range).toBeGreaterThanOrEqual(plan.falloffEnd);
+  });
+});
+
+describe('Duck 996 狂热红鸭', () => {
+  it('setRage 换红色自发光材质、结束还原，枪械不受影响', () => {
+    const d = new Duck('player', 1, 'rifle', { planId: 'ds' });
+    const torso = d.body.children[0];
+    const base = torso.material;
+    const gunMat = d.gun.children[0].material;
+    d.setRage(true);
+    expect(torso.material).not.toBe(base);
+    expect(torso.material.emissive.getHex()).toBe(0x7a1005);
+    expect(torso.material.color.r).toBeGreaterThan(torso.material.color.g);
+    expect(d.gun.children[0].material).toBe(gunMat);
+    d.setRage(false);
+    expect(torso.material).toBe(base);
   });
 });

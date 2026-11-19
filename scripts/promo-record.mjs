@@ -222,7 +222,7 @@ try {
   }, 1500);
   await sleep(8000);
 
-  // ---- combatB: GLM 一次调用五弹丸，仍只消耗一次基础 32 Token ----
+  // ---- combatB: GLM 一次调用六弹丸，仍只消耗一次基础 32 Token ----
   stage = 'combatB';
   await clearField();
   await evaluate('window.__game.coins = 2000');
@@ -324,15 +324,15 @@ try {
       e.pos.set(Math.sin(a) * d, 0, Math.cos(a) * d); e.duck.group.position.copy(e.pos); }
     return 1; })()`);
   await sleep(400);
-  await tapKey('Digit1', 49); // 嘎嘎乱杀
+  await tapKey('Digit1', 49); // 加班
   await sleep(3000);
   await evaluate(`(() => { const g = window.__game;
     for (const [x, z] of [[3, 3], [-3, 3]]) { g.spawnEnemy('pistol'); const e = g.enemies[g.enemies.length - 1];
       e.pos.set(x, 0, z); e.duck.group.position.copy(e.pos); }
     return 1; })()`);
-  await tapKey('Digit2', 50); // 抱头蹲防
+  await tapKey('Digit2', 50); // 调休
   await sleep(3000);
-  await tapKey('Digit3', 51); // 红温暴走
+  await tapKey('Digit3', 51); // 996
   await sleep(300);
   await aimAt(2, 0.7, 2);
   await evaluate('window.__game.mouse.down = true');
@@ -343,7 +343,7 @@ try {
       g.spawnEnemy('brawler'); const e = g.enemies[g.enemies.length - 1];
       e.pos.set(Math.sin(a) * 4, 0, Math.cos(a) * 4); e.duck.group.position.copy(e.pos); }
     return 1; })()`);
-  await tapKey('Digit4', 52); // 嘎瓦鲁多
+  await tapKey('Digit4', 52); // 卷王模式
   await sleep(3000);
 
   // ---- plans: 五计划单一订阅；每次切换立即全费，切回也付费 ----
@@ -364,7 +364,7 @@ try {
   await tapKey('KeyB', 66);
   await sleep(500);
 
-  // ---- benefits: 展示名称 / 实体，真实走近拾取并结算金币与即时效果 ----
+  // ---- benefits: 展示名称 / 实体，真实走近拾取并结算收益与即时效果 ----
   stage = 'benefits';
   await mark('benefits');
   await clearField();

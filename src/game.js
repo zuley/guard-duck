@@ -1,16 +1,45 @@
 import * as THREE from 'three';
 import { Duck, PALETTES } from './duck.js';
+import { ClaudeMissileVisual } from './claude-missile.js';
+import { FIRST_EMBER_LANDING, LAST_EMBER_LANDING, GroundFireVisual } from './ground-fire.js';
 import { FX } from './fx.js';
-import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, enemyName, skillCountForLevel } from './rules.js';
+import { WEAPON, ENEMY_TYPES, wavePlan, waveIntro, damageAtDistance, scoreFor, rollDrop, mulberry32, canEngage, computeLoadout, coinsFor, rollLoot, LOOT_ITEMS, xpForLevel, xpForKill, WAVE_CLEAR_XP, CARD_BY_ID, CARD_RARITIES, rollCards, cardEffects, SKILLS, SKILL_TUNING, SKILL_SHOUTS, applyCards, ELITE, eliteHpMul, ELITE_SKILL, BOSS_SKILL, raySphereT, marchImpact, segmentTouchesCircle, enemyName, skillCountForLevel } from './rules.js';
 import { PLANS, STARTING_COINS, getPlan, coinsToMicros, microsToCoins, quoteSubscription, quoteUsage, settleInvocation, banChance, PROTECTION_ITEMS, PROTECTION_DURATION, getProtection, rollProtection } from './subscriptions.js';
 import { ARENA, GATES, GATE_LANE_HALF, groundHeight, waterSurfaceAt, resolveColliders } from './world.js';
-import { textTexture } from './textures.js';
+import { bubbleTexture, textTexture } from './textures.js';
 import { makePickupVisual } from './pickups.js';
 
 const LOOT_BY_ID = Object.fromEntries(LOOT_ITEMS.map((i) => [i.id, i]));
 const GAMEPAD_SKILLS = [[12, 1], [15, 2], [13, 3], [14, 4]];
-// Claude 追踪导弹最大转向角速度（rad/s）：转弯半径 = 弹速 / 角速度，配合较低弹速得到柔和弧线而非急折线
-const MISSILE_TURN_RATE = 13;
+// 转向角速度与弹速匹配，避免提速后明显增大转弯半径
+const MISSILE_TURN_RATE = 24;
+const MISSILE_BLAST_RADIUS = 5;
+const MISSILE_FIRE_LIFETIME = LAST_EMBER_LANDING + 4;
+
+const BUBBLE_RADIUS = 0.34;
+const QWEN_BLADE_HALF_WIDTH = 1.25;
+const QWEN_BLADE_HEIGHT_PAD = 0.26;
+const QWEN_BLADE_DEPTH_SCALE = 2.7;
+const QWEN_BLADE_FRONT_DEPTH = (0.57 - 0.14) * 0.5 * QWEN_BLADE_DEPTH_SCALE;
+const DS_TRACER_LENGTH = 1.3;
+
+function qwenBladeGeometry(innerDepth) {
+  const shape = new THREE.Shape();
+  const width = QWEN_BLADE_HALF_WIDTH;
+  shape.moveTo(-width, -0.14);
+  shape.quadraticCurveTo(0, 0.57, width, -0.14);
+  shape.quadraticCurveTo(0, innerDepth, -width, -0.14);
+  return new THREE.ShapeGeometry(shape, 20).scale(1, QWEN_BLADE_DEPTH_SCALE, 1).rotateX(Math.PI / 2);
+}
+
+function bladeTouchesEnemy(pos, stride, direction, enemy) {
+  const dx = pos.x - enemy.pos.x, dz = pos.z - enemy.pos.z;
+  const depth = enemy.radius + QWEN_BLADE_FRONT_DEPTH;
+  const width = enemy.radius + QWEN_BLADE_HALF_WIDTH;
+  const along = (dx * direction.x + dz * direction.z) / depth;
+  const across = (dx * direction.z - dz * direction.x) / width;
+  return segmentTouchesCircle(along, across, stride / depth, 0, 0, 0, 1);
+}
 
 // 头顶名字精灵：贴图由 textTexture 内部统一缓存（32px 小栅格），此处不再自建缓存
 function makeNameSprite(text, color = '#ffffff', height = 0.3) {
@@ -44,6 +73,39 @@ function pointBlocked(x, z, colliders) {
   return false;
 }
 
+function blockerTime(x, z, dx, dz, colliders) {
+  let first = Infinity;
+  const lengthSq = dx * dx + dz * dz;
+  for (const c of colliders) {
+    const ox = x - c.x, oz = z - c.z;
+    if (c.hx !== undefined) {
+      if (Math.abs(ox) > c.hx + Math.abs(dx) || Math.abs(oz) > c.hz + Math.abs(dz)) continue;
+      let enter = 0, exit = 1;
+      for (const [offset, delta, halfSize] of [[ox, dx, c.hx], [oz, dz, c.hz]]) {
+        if (delta === 0) {
+          if (Math.abs(offset) > halfSize) { enter = Infinity; break; }
+        } else {
+          const a = (-halfSize - offset) / delta, b = (halfSize - offset) / delta;
+          enter = Math.max(enter, Math.min(a, b));
+          exit = Math.min(exit, Math.max(a, b));
+        }
+      }
+      if (enter <= exit) first = Math.min(first, enter);
+    } else {
+      if (Math.abs(ox) > c.r + Math.abs(dx) || Math.abs(oz) > c.r + Math.abs(dz)) continue;
+      const offsetSq = ox * ox + oz * oz - c.r * c.r;
+      if (offsetSq <= 0) return 0;
+      if (!lengthSq) continue;
+      const along = ox * dx + oz * dz;
+      const disc = along * along - lengthSq * offsetSq;
+      if (disc < 0) continue;
+      const t = (-along - Math.sqrt(disc)) / lengthSq;
+      if (t >= 0 && t <= 1) first = Math.min(first, t);
+    }
+  }
+  return first;
+}
+
 export class Game {
   constructor(engine, world, hud, audio) {
     this.engine = engine;
@@ -55,7 +117,7 @@ export class Game {
     this.keys = new Set();
     this.mouse = { x: innerWidth / 2, y: innerHeight / 2, down: false };
     this.aimPoint = new THREE.Vector3(0, 0.7, 6);
-    this.impactPoint = new THREE.Vector3(0, 0, 6);
+    this.bulletStop = new THREE.Vector3(0, 0, 6);
     this.ray = new THREE.Raycaster();
     this._frustum = new THREE.Frustum();
     this._projMat = new THREE.Matrix4();
@@ -74,31 +136,60 @@ export class Game {
     this.playerDuck.group.position.set(0, 0, 3);
     this.playerHpBar = this.makeHpBar(0x7ee06a, '打工鸭鸭', '#ffe9a8');
     this.playerHpBar.group.visible = false;
+    const sBg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x1a1208, transparent: true, opacity: 0.75, depthWrite: false }));
+    sBg.scale.set(1.5, 0.12, 1); sBg.position.y = 0.17; sBg.visible = false;
+    const sFill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x6fd8ff, transparent: true, opacity: 0.95, depthWrite: false }));
+    sFill.scale.set(1.42, 0.07, 1); sFill.position.y = 0.17; sFill.visible = false;
+    this.playerHpBar.group.add(sBg, sFill);
+    this.playerHpBar.shieldBg = sBg;
+    this.playerHpBar.shieldFill = sFill;
+    this.playerHpBar.nameBaseY = this.playerHpBar.label ? this.playerHpBar.label.position.y : 0;
+    // 调休护盾罩：菲涅尔边缘光的半透明泡，罩住整只鸭鸭
+    this.shieldDome = new THREE.Mesh(
+      new THREE.SphereGeometry(1.05, 28, 18),
+      new THREE.ShaderMaterial({
+        transparent: true, depthWrite: false,
+        uniforms: { uT: { value: 0 }, uFade: { value: 1 }, uColor: { value: new THREE.Color(0x7fd8ff) } },
+        vertexShader: /* glsl */`
+          varying vec3 vN; varying vec3 vV;
+          void main() {
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vN = normalize(mat3(modelMatrix) * normal);
+            vV = normalize(cameraPosition - wp.xyz);
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }`,
+        fragmentShader: /* glsl */`
+          uniform vec3 uColor; uniform float uT; uniform float uFade;
+          varying vec3 vN; varying vec3 vV;
+          void main() {
+            float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.0);
+            float pulse = 0.85 + 0.15 * sin(uT * 5.0);
+            float a = (0.1 + 0.6 * f) * pulse * uFade;
+            gl_FragColor = vec4(uColor + vec3(0.3) * f, a);
+          }`,
+      }));
+    this.shieldDome.visible = false;
+    this.domePop = 0;
+    engine.scene.add(this.shieldDome);
     const imGeo = new THREE.RingGeometry(0.22, 0.34, 24);
     imGeo.rotateX(-Math.PI / 2);
     this.impactMarker = new THREE.Mesh(imGeo, new THREE.MeshBasicMaterial({ color: 0xffd080, transparent: true, opacity: 0.85, depthWrite: false }));
     this.impactMarker.visible = false;
     engine.scene.add(this.impactMarker);
-    this._bulletGeo = new THREE.CapsuleGeometry(0.03, 0.12, 3, 6);
-    this._bulletGeo.rotateX(Math.PI / 2);
-    this._bulletMat = new THREE.MeshStandardMaterial({ color: 0xd8b060, roughness: 0.35, metalness: 0.85, emissive: 0x201004 });
-    this._tailGeo = new THREE.BoxGeometry(0.05, 0.05, 1);
-    // 差异化子弹几何体：按价格梯度递增视觉复杂度
-    this._bulletGeoOrb = new THREE.SphereGeometry(0.06, 8, 6);
-    this._bulletGeoTracer = new THREE.CapsuleGeometry(0.02, 0.22, 3, 6);
-    this._bulletGeoTracer.rotateX(Math.PI / 2);
-    this._bulletGeoEnergy = new THREE.CapsuleGeometry(0.04, 0.18, 4, 8);
-    this._bulletGeoEnergy.rotateX(Math.PI / 2);
-    this._tailGeoWide = new THREE.BoxGeometry(0.09, 0.09, 1);
-    this._tailGeoThin = new THREE.BoxGeometry(0.03, 0.03, 1);
-    // Claude 追踪导弹：弹体 / 鼻锥 / 尾翼 / 尾焰，均沿 z 轴（鼻锥朝 +z，尾焰朝 -z）
-    this._missileBodyGeo = new THREE.CylinderGeometry(0.055, 0.062, 0.42, 10);
-    this._missileBodyGeo.rotateX(Math.PI / 2);
-    this._missileNoseGeo = new THREE.ConeGeometry(0.055, 0.2, 10);
-    this._missileNoseGeo.rotateX(Math.PI / 2);
-    this._missileFinGeo = new THREE.BoxGeometry(0.018, 0.17, 0.15);
-    this._missileFlameGeo = new THREE.ConeGeometry(0.05, 0.28, 8);
-    this._missileFlameGeo.rotateX(-Math.PI / 2);
+    // 圆点子弹共享球体几何，颜色区分计划与狂热/霜冻状态
+    this._bulletGeoOrb = new THREE.SphereGeometry(0.09, 10, 8);
+    this._qwenBladeGeo = qwenBladeGeometry(0.18);
+    this._qwenEdgeGeo = qwenBladeGeometry(0.46).translate(0, 0.003, 0);
+    this._dsCoreGeo = new THREE.CapsuleGeometry(0.078, 0.19, 4, 10).rotateX(Math.PI / 2);
+    this._dsTracerGeo = new THREE.ConeGeometry(0.093, DS_TRACER_LENGTH, 8, 6, true)
+      .rotateX(-Math.PI / 2).translate(0, 0, -DS_TRACER_LENGTH / 2);
+    const tracerPositions = this._dsTracerGeo.attributes.position;
+    const tracerColors = new Float32Array(tracerPositions.count * 4);
+    for (let i = 0; i < tracerPositions.count; i++) {
+      const fade = Math.max(0, 1 + tracerPositions.getZ(i) / DS_TRACER_LENGTH);
+      tracerColors.set([1, 1, 1, fade * fade], i * 4);
+    }
+    this._dsTracerGeo.setAttribute('color', new THREE.BufferAttribute(tracerColors, 4));
     this._bulletMatCache = new Map();
     this.enemies = [];
     this.bullets = [];
@@ -123,7 +214,7 @@ export class Game {
       hp: 100, maxHp: 100,
       heat: 0, fireT: 0, dashT: 0, dashCd: 0, iframes: 0,
       lastHurt: -99, aimYaw: 0, moving: false, dashDir: new THREE.Vector3(0, 0, -1),
-      shield: 0, shieldMax: 0, skillShield: 0, shieldSkillT: 0, rageT: 0, hasteT: 0,
+      shield: 0, shieldMax: 0, skillShield: 0, shieldSkillT: 0, rageT: 0, rageExtended: 0, hasteT: 0,
     };
     this.wave = 0;
     this.waveState = 'inter';
@@ -151,6 +242,8 @@ export class Game {
     this.overTimer = null;
     this.skillCd = { storm: 0, shield: 0, rage: 0, slow: 0 };
     this.slowT = 0; this.slowFactor = 1;
+    this.bombs = [];
+    this.missileFires = [];
     this.recomputeLoadout();
     this.p.hp = this.p.maxHp;
     if (this.fragile) { this.p.hp = 1; this.p.maxHp = 1; }
@@ -171,11 +264,14 @@ export class Game {
       if (e.hpBar) this.removeHpBar(e.hpBar);
     }
     for (const pk of this.pickups) this.engine.scene.remove(pk.mesh);
-    for (const b of this.bullets) if (b.vis) this.engine.scene.remove(b.vis);
+    for (const b of this.bullets) this.removeAttackVisual(b.vis);
     for (const b of this.ebullets) if (b.spr) this.engine.scene.remove(b.spr);
     for (const m of this.orbitals) this.engine.scene.remove(m);
+    for (const b of this.bombs) this.engine.scene.remove(b.mesh);
+    for (const fire of this.missileFires) this.removeAttackVisual(fire.visual);
+    this.missileFires = [];
     this.orbitals = [];
-    this.enemies = []; this.pickups = []; this.bullets = []; this.ebullets = [];
+    this.enemies = []; this.pickups = []; this.bullets = []; this.ebullets = []; this.bombs = [];
     this.cardDraft = null;
     this.hud.cardOpen(false);
     this.hud.cardBookOpen(false);
@@ -195,7 +291,7 @@ export class Game {
     this.state = 'playing';
     this.hud.screen(null);
     this.hud.hudOn(true);
-    this.hud.toast('180 金币启动预算 · 先选择一项订阅再开工');
+    this.hud.toast('180 刀启动预算 · 先选择一项订阅再开工');
     this.audio.startMusic();
     this.updateHud();
     this.openWeapons();
@@ -300,7 +396,7 @@ export class Game {
     if (!plan || this.planId === id) return false;
     const quote = quoteSubscription(id, this.loadout);
     if (!quote || !this.debitMicros(quote.feeMicros)) {
-      this.hud.toast('金币不足，订阅与原有额度未改变');
+      this.hud.toast('余额不足，订阅与原有额度未改变');
       return false;
     }
     const first = !this.planId;
@@ -311,7 +407,7 @@ export class Game {
     this.subscription = { paidWave: coveredWave, processedWave: coveredWave };
     this.recomputeLoadout(); // 只重算一次，不在属性计算内发 Token 或扣费
     this.rebuildPlayerDuck();
-    this.hud.toast(`订阅 ${plan.label} · -${plan.fee} 金币 · +${quote.quota} Token · 已付第 ${coveredWave} 波`);
+    this.hud.toast(`订阅 ${plan.label} · -${plan.fee} 刀 · +${quote.quota} Token · 已付第 ${coveredWave} 波`);
     this.hud.subscription(this);
     this.hud.coins(this.coins);
     this.audio.uiClick();
@@ -331,7 +427,7 @@ export class Game {
     this.tokens = 0;
     this.quotaGranted = 0;
     if (!quote || !this.debitMicros(quote.feeMicros)) {
-      this.hud.toast(`${plan.label} 第 ${wave} 波未续费 · 旧额度到期 · 改为按量扣金币`);
+      this.hud.toast(`${plan.label} 第 ${wave} 波未续费 · 旧额度到期 · 改为按量扣费`);
       return false;
     }
     this.subscription.paidWave = wave;
@@ -351,7 +447,7 @@ export class Game {
     return payment;
   }
 
-  // 不限时护盾与限时蹲防盾分开记账，总数仍用 p.shield 供 HUD 显示。
+  // 不限时护盾与限时调休盾分开记账，总数仍用 p.shield 供 HUD 显示。
   // cap 只限制本次来源的补充，不得把更大的现有护盾截小。
   addShield(amount, cap = Infinity) {
     if (this.state === 'over') return 0;
@@ -384,7 +480,7 @@ export class Game {
         this.addXp(amount);
         return `经验 +${amount}`;
       }
-      case 'rage': p.rageT = Math.max(p.rageT, eff.duration); return `红温 ${eff.duration}s`;
+      case 'rage': p.rageT = Math.max(p.rageT, eff.duration); return `996 ${eff.duration}s`;
       case 'haste': p.hasteT = Math.max(p.hasteT, eff.duration); return `移速 +25% ${eff.duration}s`;
       default: return '';
     }
@@ -546,37 +642,101 @@ export class Game {
     const lo = this.loadout;
     this.audio.skillCast();
     if (sk.id === 'storm') {
-      const { damage, radius, knock } = lo.storm;
-      this.fx.ring(p.pos.clone().setY(0.4), 0xff5346, radius);
-      this.fx.feathers(p.pos, 0xff8060, 30, 5);
-      this.engine.addShake(0.3);
-      for (const e of this.enemies) {
-        if (e.dead) continue;
-        if (e.pos.distanceTo(p.pos) <= radius) {
-          const away = e.pos.clone().sub(p.pos).setY(0).normalize();
-          e.vel.addScaledVector(away, knock);
-          this.fx.feathers(e.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 8, 3);
-          this.damageEnemy(e, damage, { color: '#ff8060' });
-        }
-      }
-      this.hud.toast('嘎嘎乱杀！寸草不生');
+      const { damage, radius } = lo.storm;
+      this.throwOvertimeBomb(damage, radius);
+      this.hud.toast('加班！加班炸弹已扔出，炸到的同事原地加班');
     } else if (sk.id === 'shield') {
       p.shield = Math.max(0, p.shield - p.skillShield) + lo.shield.pool;
       p.skillShield = lo.shield.pool;
       p.shieldMax = Math.max(p.shieldMax, p.shield);
       p.shieldSkillT = lo.shield.duration;
+      this.domePop = 0;
       this.fx.ring(p.pos.clone().setY(0.6), 0x7ee06a, 2);
-      this.hud.toast(`抱头蹲防！吸收 ${lo.shield.pool} 伤害`);
+      this.hud.toast(`调休！${lo.shield.pool} 点工作伤害由假期抵扣`);
     } else if (sk.id === 'rage') {
       p.rageT = lo.rage.duration;
-      this.fx.ring(p.pos.clone().setY(0.5), 0xffd24a, 2.4);
-      this.hud.toast('红温暴走！射速与伤害提升');
+      p.rageExtended = 0;
+      this.fx.ring(p.pos.clone().setY(0.5), 0xff4040, 2.4);
+      this.hud.toast('996 是福报！射速伤害提升，生命燃烧中');
     } else if (sk.id === 'slow') {
       this.slowT = lo.slow.duration;
       this.slowFactor = lo.slow.factor;
-      this.fx.ring(p.pos.clone().setY(0.3), 0x6fd6ff, 8);
-      this.hud.toast('嘎瓦鲁多！敌人集体慢动作');
+      this.fx.ring(p.pos.clone().setY(0.3), 0xb06fff, 8);
+      this.hud.toast('卷王模式！我卷得够狠，同事就跟不上');
     }
+    const lines = SKILL_SHOUTS[sk.id];
+    this.fx.shout(lines[Math.floor(Math.random() * lines.length)], p.pos);
+  }
+
+  /* ---------------- 加班炸弹 ---------------- */
+
+  throwOvertimeBomb(damage, radius) {
+    const p = this.p;
+    const target = this.aimPoint.clone();
+    target.x = Math.max(-ARENA, Math.min(ARENA, target.x));
+    target.z = Math.max(-ARENA, Math.min(ARENA, target.z));
+    target.y = groundHeight(target.x, target.z);
+    const T = 0.6, g = 30;
+    const pos = p.pos.clone().setY(p.pos.y + 1.2);
+    const vel = target.clone().sub(pos).divideScalar(T);
+    vel.y = (target.y - pos.y) / T + 0.5 * g * T;
+    if (!this._bombGeo) {
+      this._bombGeo = new THREE.SphereGeometry(0.17, 10, 8);
+      this._bombMat = new THREE.MeshStandardMaterial({ color: 0x2b2b33, emissive: 0xffd24a, emissiveIntensity: 0.6 });
+    }
+    const mesh = new THREE.Mesh(this._bombGeo, this._bombMat);
+    mesh.position.copy(pos);
+    this.engine.scene.add(mesh);
+    this.bombs.push({ pos, vel, t: 0, T, g, target, damage, radius, mesh });
+  }
+
+  updateBombs(dt) {
+    if (this.state !== 'playing') return;
+    for (let i = this.bombs.length - 1; i >= 0; i--) {
+      const b = this.bombs[i];
+      b.t += dt;
+      b.vel.y -= b.g * dt;
+      b.pos.addScaledVector(b.vel, dt);
+      b.mesh.position.copy(b.pos);
+      b.mesh.rotation.x += dt * 9;
+      if (b.t >= b.T) {
+        b.pos.copy(b.target);
+        this.explodeOvertimeBomb(b);
+        this.engine.scene.remove(b.mesh);
+        this.bombs.splice(i, 1);
+      }
+    }
+  }
+
+  explodeOvertimeBomb(b) {
+    const c = b.pos;
+    this.fx.ring(c.clone().setY(c.y + 0.3), 0x9fe8ff, b.radius);
+    this.fx.spark(c.clone().setY(c.y + 0.5), new THREE.Vector3(0, 1, 0), 14, 0x9fe8ff, 7);
+    this.fx.smoke(c.clone().setY(c.y + 0.3), 4, 0xbfeaff, 0.5, 2.4, 0.5);
+    this.engine.addShake(0.35);
+    this.audio.zap();
+    this.audio.boom();
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      if (e.pos.distanceTo(c) <= b.radius) {
+        this.fx.bolt(c.clone().setY(c.y + 1.6), e.pos.clone().setY(e.pos.y + 0.9));
+        this.fx.feathers(e.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 8, 3);
+        this.damageEnemy(e, b.damage, { color: '#9fe8ff', source: 'overtime' });
+        if (!e.dead) this.rootEnemy(e);
+      }
+    }
+  }
+
+  rootEnemy(e) {
+    e.rootT = SKILL_TUNING.overtimeRootSec;
+    this.fx.ring(e.pos.clone().setY(e.pos.y + 0.2), 0x9fe8ff, 0.9);
+    if (!e.rootLabel && e.hpBar) {
+      e.rootLabel = makeNameSprite('加班中', '#9fe8ff', 0.6);
+      e.rootLabel.position.y = 1.02;
+      e.rootLabel.renderOrder = 2;
+      e.hpBar.group.add(e.rootLabel);
+    }
+    if (e.rootLabel) e.rootLabel.visible = true;
   }
 
   rebuildPlayerDuck() {
@@ -588,6 +748,7 @@ export class Game {
     this.engine.scene.add(duck.group);
     old.dispose();
     this.playerDuck = duck;
+    if (this.p && this.p.rageT > 0) duck.setRage(true);
   }
 
   /* ---------------- 主更新 ---------------- */
@@ -605,6 +766,7 @@ export class Game {
       this.playerDuck.group.position.set(0, 0, 3);
       this.playerDuck.update(dt, { aimYaw: Math.sin(this.t * 0.4) * 0.7, moving: false });
       this.playerHpBar.group.visible = false;
+      this.shieldDome.visible = false;
       this.impactMarker.visible = false;
       this.hud.crosshair(0, 0, 0, false);
       return;
@@ -627,8 +789,10 @@ export class Game {
       this.time += dt;
       this.updatePlayer(dt);
       if (this.state === 'playing') this.updateWaves(dt);
-      // 选卡立即冻结；阵亡当帧也不能再靠工资/福利回血或继续收金币。
+      // 选卡立即冻结；阵亡当帧也不能再靠工资/福利回血或继续收刀。
       if (this.state === 'playing') this.updateEnemies(dt);
+      if (this.state === 'playing') this.updateMissileFires(dt);
+      if (this.state === 'playing') this.updateBombs(dt);
       if (this.state === 'playing') this.updateBullets(dt);
       if (this.state === 'playing') this.updatePickups(dt);
       if (this.state === 'playing') this.updateOrbit(dt);
@@ -671,6 +835,7 @@ export class Game {
   }
 
   spreadNow() {
+    if (this.planId === 'gpt') return 0; // 激光直射，无散布
     const p = this.p;
     return (this.loadout.gun.spreadBase + (p.moving ? WEAPON.spreadMove : 0) + p.heat * WEAPON.spreadHeat) * this.loadout.spreadMul;
   }
@@ -694,14 +859,28 @@ export class Game {
     for (const id of Object.keys(this.skillCd)) this.skillCd[id] = Math.max(0, this.skillCd[id] - dt);
     this.guardianCd = Math.max(0, this.guardianCd - dt);
     p.rageT = Math.max(0, p.rageT - dt);
+    this.playerDuck.setRage(p.rageT > 0);
     p.hasteT = Math.max(0, p.hasteT - dt);
-    // 蹲防到期只撤回尚未消耗的技能盾，保留福利 / 开工护盾 / 溢出治疗护盾。
+    // 调休到期：没用完的假期折现回血（被打破的盾不折现），保留福利 / 开工护盾 / 溢出治疗护盾。
     if (p.shieldSkillT > 0) {
       p.shieldSkillT = Math.max(0, p.shieldSkillT - dt);
       if (p.shieldSkillT <= 0) {
         p.shield = Math.max(0, p.shield - p.skillShield);
+        const heal = Math.min(p.maxHp - p.hp, p.skillShield);
+        if (heal > 0.5) {
+          p.hp += heal;
+          this.fx.number(p.pos.clone().setY(p.pos.y + 1.9), `调休折现 +${Math.round(heal)}`, '#7ee06a');
+          this.fx.ring(p.pos.clone().setY(0.5), 0x7ee06a, 1.8);
+          this.hud.toast(`调休折现：没用完的假期回复 ${Math.round(heal)} 生命`);
+        }
         p.skillShield = 0;
       }
+    }
+    // 996 烧命：持续扣血，属于自我消耗，不走护盾 / 不死鸟
+    if (p.rageT > 0) {
+      p.hp -= SKILL_TUNING.rageBurnPerSec * dt;
+      p.lastHurt = this.time;
+      if (p.hp <= 0) { p.hp = 0; this.endRun('combat'); return; }
     }
     if (this.slowT > 0) { this.slowT = Math.max(0, this.slowT - dt); if (this.slowT <= 0) this.slowFactor = 1; }
     if (k.has('Space') && p.dashCd <= 0) {
@@ -714,7 +893,7 @@ export class Game {
       k.delete('Space');
     }
 
-    const sm = this.loadout.speedMul * (p.hasteT > 0 ? 1.25 : 1);
+    const sm = this.loadout.speedMul * (p.hasteT > 0 ? 1.25 : 1) * (p.rageT > 0 ? SKILL_TUNING.rageMoveMul : 1);
     const target = p.dashT > 0 ? p.dashDir.clone().multiplyScalar(13.5 * sm) : dir.clone().multiplyScalar(6.2 * sm);
     p.vel.lerp(target, 1 - Math.exp(-dt * (p.dashT > 0 ? 30 : 11)));
     p.pos.addScaledVector(p.vel, dt);
@@ -767,42 +946,56 @@ export class Game {
     }
     p.aimYaw = Math.atan2(this.aimPoint.x - p.pos.x, this.aimPoint.z - p.pos.z);
 
-    // 弹道落点预测：与子弹判定同规则步进，供准星显示
+    // 沿准星方向预测弹道停止点，散射武器以扇面中线为准
     const muzzle = this.playerDuck.muzzleWorld(new THREE.Vector3());
     const bdir = this.aimPoint.clone().sub(muzzle);
-    if (bdir.lengthSq() < 1e-8) bdir.set(0, 0, 1); else bdir.normalize();
+    bdir.y = 0;
+    if (bdir.lengthSq() < 1e-8) bdir.set(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw));
+    bdir.normalize();
+    const isBubble = this.planId === 'glm';
     const targets = [];
     for (const e of this.enemies) {
-      if (!e.dead) targets.push({ x: e.pos.x, z: e.pos.z, radius: e.radius + 0.22, height: 1.7 * e.scale });
+      if (e.dead || this.planId === 'qwen') continue; // 半月刀穿过敌人，落点环显示实际停止点
+      const target = { x: e.pos.x, z: e.pos.z, radius: e.radius + 0.22, height: 1.7 * e.scale };
+      if (isBubble) {
+        target.radius = e.radius + BUBBLE_RADIUS;
+        target.minY = e.pos.y - BUBBLE_RADIUS;
+        target.height += e.pos.y + BUBBLE_RADIUS;
+      }
+      targets.push(target);
     }
-    const imp = marchImpact(muzzle, bdir, this.loadout.range, targets,
-      (x, z) => pointBlocked(x, z, this.world.colliders),
-      (x, z) => { const wy = waterSurfaceAt(x, z); return wy !== null ? wy : groundHeight(x, z); }, 0.5);
-    // 地面命中时弹道直线恰止于地面瞄准点，消除步进粒度误差，保证准星与鼠标地面点重合
-    if (imp.hit === 'ground' && this.aimPoint.y <= groundHeight(this.aimPoint.x, this.aimPoint.z) + 0.05) {
-      this.impactPoint.copy(this.aimPoint);
-    } else if (imp.hit === 'none') {
-      // 超出射程：子弹在射程末端坠地，落点标记显示短落点
-      this.impactPoint.set(imp.x, groundHeight(imp.x, imp.z), imp.z);
-    } else {
-      this.impactPoint.set(imp.x, imp.y, imp.z);
-    }
-    // Claude 追踪导弹：落点标记指向锁定敌人的预测拦截点；准心只指方向，落点不是准心
+    const range = this.loadout.range;
+    const colliders = this.world.colliders;
+    const wallT = muzzle.y < 1.8 ? blockerTime(muzzle.x, muzzle.z, bdir.x * range, bdir.z * range, colliders) : Infinity;
+    const cap = wallT === Infinity ? range : range * wallT;
+    const imp = marchImpact(muzzle, bdir, cap, targets, () => false,
+      (x, z) => { const wy = waterSurfaceAt(x, z); return wy !== null ? wy : groundHeight(x, z); },
+      isBubble ? 0.25 : 0.5, isBubble,
+      (t) => muzzle.y >= 1.8 || blockerTime(muzzle.x, muzzle.z, t.x - muzzle.x, t.z - muzzle.z, colliders) === Infinity);
+    if (imp.hit === 'none' && wallT !== Infinity) imp.hit = 'wall';
+    this.bulletStop.set(imp.x, groundHeight(imp.x, imp.z), imp.z);
+    // Claude 追踪导弹的停止点指向锁定敌人的预测拦截点。
     if (this.planId === 'claude') {
       const lock = this.lockMissileTarget({ pos: muzzle, range: this.loadout.range }, bdir);
       if (lock) {
         const lead = this.missileLeadPoint(muzzle, lock, this.loadout.bulletSpeed);
-        this.impactPoint.set(lead.x, groundHeight(lead.x, lead.z), lead.z);
+        this.bulletStop.set(lead.x, groundHeight(lead.x, lead.z), lead.z);
       }
     }
-    const markGap = Math.hypot(this.impactPoint.x - this.aimPoint.x, this.impactPoint.z - this.aimPoint.z);
-    this.impactMarker.visible = markGap > 0.5;
-    this.impactMarker.position.set(this.impactPoint.x, groundHeight(this.impactPoint.x, this.impactPoint.z) + 0.03, this.impactPoint.z);
+    const markGap = Math.hypot(this.bulletStop.x - this.aimPoint.x, this.bulletStop.z - this.aimPoint.z);
+    this.impactMarker.visible = markGap > 0.5 && this.planId !== 'gpt';
+    this.impactMarker.position.set(this.bulletStop.x, this.bulletStop.y + 0.03, this.bulletStop.z);
 
     // 武器调用：一次连发 / 散射只支付一次 Token，失败不吞部分额度。
-    p.fireT = Math.max(0, p.fireT - dt);
     p.heat = Math.max(0, p.heat - dt * 1.1);
-    if (this.mouse.down && p.fireT <= 0) this.fire();
+    if (p.fireT > 0) p.fireT -= dt;
+    if (!this.mouse.down) p.fireT = Math.max(0, p.fireT);
+    else while (p.fireT <= 1e-9) {
+      const carry = Math.min(0, p.fireT);
+      p.fireT = 0;
+      if (!this.fire()) break;
+      p.fireT += carry;
+    }
     if (this.state !== 'playing') return; // 封号时不再自愈或重新显示头顶血条
 
     // 缓慢自愈（自愈绒毛卡提升回复速率）
@@ -819,6 +1012,24 @@ export class Game {
     this.playerHpBar.group.position.set(p.pos.x, p.pos.y + 1.9, p.pos.z);
     this.playerHpBar.fill.scale.x = 1.42 * ratio;
     this.playerHpBar.fill.position.x = -(1.42 * (1 - ratio)) / 2;
+    const bar = this.playerHpBar;
+    const shOn = p.shield > 0;
+    bar.shieldBg.visible = bar.shieldFill.visible = shOn;
+    if (shOn) {
+      const sr = Math.max(0, Math.min(1, p.shield / Math.max(p.shieldMax, 1)));
+      bar.shieldFill.scale.x = 1.42 * sr;
+      bar.shieldFill.position.x = -(1.42 * (1 - sr)) / 2;
+    }
+    if (bar.label) bar.label.position.y = bar.nameBaseY + (shOn ? 0.16 : 0);
+    this.shieldDome.visible = p.shieldSkillT > 0;
+    if (this.shieldDome.visible) {
+      this.domePop = Math.min(0.22, this.domePop + dt);
+      const k = 1 - Math.pow(1 - this.domePop / 0.22, 3);
+      this.shieldDome.scale.setScalar(0.5 + 0.5 * k);
+      this.shieldDome.position.set(p.pos.x, p.pos.y + 0.72, p.pos.z);
+      this.shieldDome.material.uniforms.uT.value = this.time;
+      this.shieldDome.material.uniforms.uFade.value = Math.min(1, p.shieldSkillT / 0.3);
+    }
   }
 
   botControl() {
@@ -873,13 +1084,21 @@ export class Game {
     const raging = p.rageT > 0;
     p.fireT = 60 / (lo.rpm * (raging ? lo.rage.rpmMul : 1));
     p.heat = Math.min(1, p.heat + 0.11);
-    const extra = lo.mods.multishot || 0;
+    const extra = this.planId === 'qwen' ? 0 : lo.mods.multishot || 0;
     this.shots += lo.pellets + extra;
     const origin = this.playerDuck.muzzleWorld(new THREE.Vector3());
-    const base = this.aimPoint.clone().sub(origin).normalize();
+    // 取枪口到准星的水平瞄准方向
+    const base = this.aimPoint.clone().sub(origin);
+    base.y = 0;
+    if (base.lengthSq() < 1e-8) base.set(Math.sin(p.aimYaw), 0, Math.cos(p.aimYaw));
+    base.normalize();
     const spread = this.spreadNow();
+    const fanWidth = lo.pellets > 1 ? lo.gun.pelletSpread : 0;
+    const fanCenter = fanWidth ? (Math.random() - 0.5) * 2 * spread : 0;
     const up = new THREE.Vector3(0, 1, 0);
     const dmg = lo.damage * (raging ? lo.rage.dmgMul : 1);
+    const baseColor = this.planId === 'gpt' ? 0x40e8a0 : this.planId === 'qwen' ? 0x8661fc : lo.gun.accent;
+    const color = raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : baseColor;
     const side = new THREE.Vector3(base.z, 0, -base.x).normalize();
     const attack = {
       provider: this.planId,
@@ -887,23 +1106,32 @@ export class Game {
       mods: Object.fromEntries(Object.entries(lo.mods).map(([key, value]) =>
         [key, value && typeof value === 'object' ? { ...value } : value])),
     };
-    for (let i = 0; i < lo.pellets + extra; i++) {
+    if (this.planId === 'gpt') {
+      this.fireLaser(origin, base, side, dmg, attack, extra, color);
+    } else for (let i = 0; i < lo.pellets + extra; i++) {
       const d = base.clone();
-      d.applyAxisAngle(up, (Math.random() - 0.5) * (spread * 2 + (lo.pellets > 1 ? (lo.gun.pelletSpread ?? 0.14) : 0)));
-      d.y += (Math.random() - 0.5) * spread;
+      // 基础气泡均匀铺开，热量和移动一起偏移整个扇面。
+      const angle = fanWidth && i < lo.pellets
+        ? fanCenter + (i / (lo.pellets - 1) - 0.5) * fanWidth
+        : (Math.random() - 0.5) * 2 * spread;
+      d.applyAxisAngle(up, angle);
       d.normalize();
       // 双管齐下：额外弹从枪口两侧平行射出，不共用同一条射线
       const org = origin.clone();
       if (i >= lo.pellets) org.addScaledVector(side, ((i - lo.pellets) % 2 === 0 ? 1 : -1) * 0.28);
-      // 导弹寿命覆盖整个射程并留转弯余量，避免低速弹在到达远程目标前提前到期
-      const life = this.planId === 'claude' ? lo.range / lo.bulletSpeed + 0.4 : 1.1;
+      // 慢速弹的寿命覆盖整个射程
+      const slow = this.planId === 'claude' || this.planId === 'glm';
+      const life = slow ? lo.range / lo.bulletSpeed + 0.4 : 1.1;
       const b = { pos: org, vel: d.multiplyScalar(lo.bulletSpeed), life, traveled: 0, range: lo.range, dmg,
-        attack, pierce: this.planId === 'claude' ? 0 : (lo.intrinsicPierce || 0) + (lo.mods.pierce || 0), planId: this.planId, trailT: 0 };
-      const tailLen = this.planId === 'claude' ? 1.5 : this.planId === 'qwen' ? 2.2 : this.planId === 'gpt' ? 1.8 : this.planId === 'glm' ? 0.9 : 1.0;
-      b.vis = this.makeBulletVis(this.planId, raging ? 0xffb040 : lo.mods.frost ? 0x9fe8ff : (lo.gun.accent ?? 0xffd080), tailLen);
+        attack, pierce: this.planId === 'claude' ? 0 : (lo.intrinsicPierce || 0) + (lo.mods.pierce || 0), planId: this.planId, trailT: 0, color };
+      b.vis = this.makeBulletVis(this.planId, color);
       b.vis.position.copy(b.pos);
-      b.vis.lookAt(b.pos.clone().add(b.vel));
-      if (this.planId === 'claude') b.target = this.lockMissileTarget(b, base);
+      if (this.planId === 'claude') {
+        b.target = this.lockMissileTarget(b, base);
+        b.vis.advance?.(b.vel, 0, this.engine.camera);
+      } else if (this.planId === 'ds' || this.planId === 'qwen') {
+        b.vis.lookAt(b.pos.clone().add(b.vel));
+      }
       this.bullets.push(b);
     }
     switch (this.planId) {
@@ -914,19 +1142,19 @@ export class Game {
         this.engine.addShake(0.18);
         break;
       case 'gpt':
-        this.fx.flash(origin, 0.35);
-        this.fx.smoke(origin, 1, 0x70a090, 0.22, 1.6, 0.4);
         this.engine.addShake(0.1);
         break;
       case 'qwen':
-        this.fx.flash(origin, 0.18);
+        this.fx.flash(origin, 0.22, color);
         this.engine.addShake(0.05);
         break;
       case 'glm':
-        this.fx.flash(origin, 0.45);
-        this.fx.smoke(origin, 3, 0x7080a0, 0.35, 2.0, 0.55);
-        this.fx.spark(origin, base.clone().multiplyScalar(0.3), 4, 0x60a0ff, 3);
-        this.engine.addShake(0.22);
+        this.fx.flash(origin, 0.18);
+        this.engine.addShake(0.06);
+        break;
+      case 'ds':
+        this.fx.flash(origin, 0.3, color);
+        this.engine.addShake(0.09);
         break;
       default:
         this.fx.flash(origin, 0.22);
@@ -936,6 +1164,70 @@ export class Game {
     this.playerDuck.kick();
     this.audio.shoot();
     return true;
+  }
+
+  // GPT 激光：hitscan 直射，无散布 / 无弹体 / 无落点环；穿甲卡沿用逐目标衰减
+  fireLaser(origin, base, side, dmg, attack, extra, color) {
+    const lo = this.loadout;
+    const colliders = this.world.colliders;
+    this.impactMarker.visible = false;
+    for (let i = 0; i < lo.pellets + extra; i++) {
+      const org = origin.clone();
+      if (i >= lo.pellets) org.addScaledVector(side, ((i - lo.pellets) % 2 === 0 ? 1 : -1) * 0.28);
+      const dir = base;
+      const wallT = org.y < 1.8 ? blockerTime(org.x, org.z, dir.x * lo.range, dir.z * lo.range, colliders) : Infinity;
+      let blocked = wallT !== Infinity;
+      let limit = blocked ? lo.range * wallT : lo.range;
+      const end = org.clone();
+      for (let d = 0; d < limit;) {
+        d = Math.min(d + 0.25, limit);
+        end.copy(org).addScaledVector(dir, d);
+        const surface = waterSurfaceAt(end.x, end.z) ?? groundHeight(end.x, end.z);
+        if (end.y <= surface + 0.04) { limit = d; blocked = true; break; }
+      }
+      end.copy(org).addScaledVector(dir, limit);
+      const contacts = [];
+      for (const e of this.enemies) {
+        if (e.dead || org.y >= 1.7 * e.scale) continue;
+        const dx = e.pos.x - org.x, dz = e.pos.z - org.z;
+        const along = dx * dir.x + dz * dir.z;
+        const across = dx * dir.z - dz * dir.x;
+        const chordSq = (e.radius + 0.22) ** 2 - across ** 2;
+        if (chordSq < 0) continue;
+        const chord = Math.sqrt(chordSq);
+        if (along + chord < 0) continue;
+        const distance = Math.max(0, along - chord);
+        if (distance > limit || (blocked && distance >= limit)) continue;
+        const point = org.clone().addScaledVector(dir, distance);
+        if (org.y < 1.8 && blockerTime(point.x, point.z, e.pos.x - point.x, e.pos.z - point.z, colliders) !== Infinity) continue;
+        contacts.push({ e, point, distance });
+      }
+      contacts.sort((a, b) => a.distance - b.distance);
+      let pierce = (lo.intrinsicPierce || 0) + (lo.mods.pierce || 0);
+      let curDmg = dmg, counted = false, stopped = false;
+      for (const { e, point, distance } of contacts) {
+        if (e.dead) continue;
+        if (!counted) { this.hits++; counted = true; }
+        const d = damageAtDistance(curDmg, distance, attack);
+        this.fx.spark(point, dir.clone().multiplyScalar(-0.55), 9, color, 7);
+        this.fx.ring(point, color, 1.0);
+        this.fx.feathers(point, PALETTES[ENEMY_TYPES[e.type].palette].body, 5, 2.5);
+        this.audio.hit();
+        this.hud.hitmarker(false);
+        e.duck.kick();
+        this.damageEnemy(e, d, { mods: attack?.mods });
+        this.applyHitMods(e, point, d, attack?.mods);
+        if (!pierce) {
+          end.copy(point);
+          stopped = true;
+          break;
+        }
+        pierce--;
+        curDmg *= 0.8;
+      }
+      if (blocked && !stopped) this.fx.spark(end, dir.clone().multiplyScalar(-0.7), 5, color, 4);
+      this.fx.beam(org, end, color, stopped || blocked);
+    }
   }
 
   // 荆棘羽绒（绿）：受击对周围敌人反伤
@@ -1018,7 +1310,9 @@ export class Game {
     this.mouseFire = false;
     this.padFire = false;
     this.playerDuck.die();
+    this.playerDuck.setRage(false);
     this.playerHpBar.group.visible = false;
+    this.shieldDome.visible = false;
     this.impactMarker.visible = false;
     this.fx.feathers(p.pos, 0xffd95e, 26, 4);
     this.fx.ring(p.pos.clone().setY(0.5), reason === 'ban' ? 0xc48aff : 0xff8060, 3);
@@ -1137,6 +1431,7 @@ export class Game {
       speed: t.speed * (elite ? ELITE.speedMul : 1),
       hp: t.hp * hpScale, maxHp: t.hp * hpScale,
       fireT: 1 + this.rng() * 1.5, windup: 0, attackT: 0.6 + this.rng() * 0.8,
+      rootT: 0,
       skillKind: t.boss ? 'nova' : elite ? 'stomp' : null,
       skillCd: 2.5 + this.rng() * 2, skillT: 0,
       seed: this.rng() * 10, dead: false,
@@ -1153,7 +1448,18 @@ export class Game {
     if (elite) this.hud.toast(`精英${e.name}来袭！三倍赏金`);
   }
 
-  makeBulletVis(planId, tailColor, tailLen) {
+  removeAttackVisual(visual) {
+    if (!visual) return;
+    this.engine.scene.remove(visual);
+    visual.dispose?.();
+  }
+
+  makeBulletVis(planId, tailColor) {
+    if (planId === 'claude') {
+      const missile = new ClaudeMissileVisual(tailColor);
+      this.engine.scene.add(missile);
+      return missile;
+    }
     const g = new THREE.Group();
     // 材质按配置缓存共享：几何体本就共享，避免每发子弹新建材质造成分配与未 dispose 累积
     const cached = (key, make) => {
@@ -1161,57 +1467,41 @@ export class Game {
       if (!m) { m = make(); this._bulletMatCache.set(key, m); }
       return m;
     };
-    const addTail = (geo, color, len, opacity = 0.5) => {
-      const t = new THREE.Mesh(geo, cached(`tail:${color}:${opacity}`, () => new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false })));
-      t.scale.z = len; t.position.z = -len / 2 - 0.1; g.add(t);
-    };
     switch (planId) {
-      case 'claude': {
-        const body = new THREE.Mesh(this._missileBodyGeo, cached('body:claude', () => new THREE.MeshStandardMaterial({
-          color: 0xefe6d8, roughness: 0.3, metalness: 0.75, emissive: 0x2a1a10, emissiveIntensity: 0.4 })));
-        g.add(body);
-        const nose = new THREE.Mesh(this._missileNoseGeo, cached('nose:claude', () => new THREE.MeshStandardMaterial({
-          color: 0xd97757, roughness: 0.35, metalness: 0.6, emissive: 0xd97757, emissiveIntensity: 0.5 })));
-        nose.position.z = 0.31; g.add(nose);
-        const finMat = cached('fin:claude', () => new THREE.MeshStandardMaterial({ color: 0x9a5a42, roughness: 0.5, metalness: 0.5 }));
-        for (let k = 0; k < 4; k++) {
-          const a = Math.PI / 4 + k * Math.PI / 2;
-          const fin = new THREE.Mesh(this._missileFinGeo, finMat);
-          fin.position.set(Math.cos(a) * 0.07, Math.sin(a) * 0.07, -0.17);
-          fin.rotation.z = a; g.add(fin);
-        }
-        const flame = new THREE.Mesh(this._missileFlameGeo, cached('flame:claude', () => new THREE.MeshBasicMaterial({
-          color: 0xffb060, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })));
-        flame.position.z = -0.35; g.add(flame);
-        g.userData.flame = flame; // 供 updateBullets 做尾焰抖动
-        addTail(this._tailGeoWide, tailColor, tailLen, 0.5);
-        break;
-      }
-      case 'gpt': {
-        const core = new THREE.Mesh(this._bulletGeoEnergy, cached('core:gpt', () => new THREE.MeshStandardMaterial({
-          color: 0xc0ffd8, roughness: 0.25, metalness: 0.8, emissive: 0x10a37f, emissiveIntensity: 0.9 })));
-        g.add(core);
-        addTail(this._tailGeo, tailColor, tailLen, 0.6);
-        break;
-      }
       case 'qwen': {
-        const core = new THREE.Mesh(this._bulletGeoTracer, cached('core:qwen', () => new THREE.MeshBasicMaterial({
-          color: 0xc8b0ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })));
-        g.add(core);
-        addTail(this._tailGeoThin, tailColor, tailLen, 0.65);
+        g.rotation.order = 'YXZ';
+        const fill = cached(`qwen-fill:${tailColor}`, () => new THREE.MeshBasicMaterial({
+          color: tailColor, transparent: true, opacity: 0.63, side: THREE.DoubleSide, depthWrite: false,
+          forceSinglePass: true, toneMapped: false }));
+        const edge = cached(`qwen-edge:${tailColor}`, () => new THREE.MeshBasicMaterial({
+          color: new THREE.Color(tailColor).lerp(new THREE.Color(0xffffff), 0.47),
+          side: THREE.DoubleSide, toneMapped: false }));
+        g.add(new THREE.Mesh(this._qwenBladeGeo, fill), new THREE.Mesh(this._qwenEdgeGeo, edge));
+        break;
+      }
+      case 'ds': {
+        const core = new THREE.Mesh(this._dsCoreGeo, cached(`ds-core:${tailColor}`, () => new THREE.MeshBasicMaterial({
+          color: new THREE.Color(tailColor).lerp(new THREE.Color(0xffffff), 0.52), toneMapped: false })));
+        const tracer = new THREE.Mesh(this._dsTracerGeo, cached(`ds-tracer:${tailColor}`, () => new THREE.MeshBasicMaterial({
+          color: tailColor, vertexColors: true, transparent: true, opacity: 0.8,
+          blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })));
+        tracer.visible = false;
+        g.userData.tracer = tracer;
+        g.add(core, tracer);
         break;
       }
       case 'glm': {
-        const core = new THREE.Mesh(this._bulletGeoOrb, cached('core:glm', () => new THREE.MeshStandardMaterial({
-          color: 0xcfe0ff, roughness: 0.3, metalness: 0.7, emissive: 0x3b82f6, emissiveIntensity: 0.9 })));
-        g.add(core);
-        addTail(this._tailGeoWide, tailColor, tailLen * 0.5, 0.55);
+        const color = new THREE.Color(tailColor).lerp(new THREE.Color(0xffffff), 0.65);
+        const bubble = new THREE.Sprite(cached(`bubble:${tailColor}`, () => new THREE.SpriteMaterial({
+          map: bubbleTexture(), color, transparent: true, depthWrite: false })));
+        bubble.scale.setScalar(2 * BUBBLE_RADIUS);
+        g.add(bubble);
         break;
       }
       default: {
-        g.add(new THREE.Mesh(this._bulletGeo, this._bulletMat));
-        addTail(this._tailGeo, tailColor, tailLen, 0.4);
+        // 小圆点子弹：无拖尾，颜色随计划主题 / 狂热 / 霜冻 / 敌方橙红
+        const dotColor = new THREE.Color(tailColor).lerp(new THREE.Color(0xffffff), 0.35);
+        g.add(new THREE.Mesh(this._bulletGeoOrb, cached(`dot:${tailColor}`, () => new THREE.MeshBasicMaterial({ color: dotColor }))));
         break;
       }
     }
@@ -1226,16 +1516,17 @@ export class Game {
     const fill = new THREE.Sprite(new THREE.SpriteMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false }));
     fill.scale.set(1.42, 0.1, 1);
     group.add(bg, fill);
+    let label = null;
     if (name) {
       const h = 0.55 * nameScale;
-      const label = makeNameSprite(name, nameColor, h);
+      label = makeNameSprite(name, nameColor, h);
       label.position.y = 0.12 + h / 2;
       label.renderOrder = 1; // 名字压在血条之上，不受贴图透明排序影响
       group.add(label);
     }
     group.visible = false;
     this.engine.scene.add(group);
-    return { group, fill };
+    return { group, fill, label };
   }
 
   // 血条组随敌人销毁/清场调用：释放各自材质，名字贴图是共享缓存不销毁
@@ -1394,13 +1685,20 @@ export class Game {
         e.frostFxT = (e.frostFxT || 0) - dt;
         if (e.frostFxT <= 0) { e.frostFxT = 0.4; this.fx.smoke(e.pos.clone().setY(e.pos.y + 0.5), 1, 0x9fe8ff, 0.22, 0.8, 0.35); }
       }
+      // 加班定身：原地罚站，头顶「加班中」；攻击计时不受影响（区别于卷王的全面暂停）
+      if (e.rootT > 0) {
+        e.rootT = Math.max(0, e.rootT - dt);
+        if (e.rootLabel) e.rootLabel.visible = e.rootT > 0;
+      }
       const frost = e.frostT > 0 ? e.frostFactor : 1;
-      const speed = e.speed * this.plan.speedScale * frost * (this.slowT > 0 ? this.slowFactor : 1);
+      const speed = e.speed * this.plan.speedScale * frost * (this.slowT > 0 ? this.slowFactor : 1) * (e.rootT > 0 ? 0 : 1);
+      // 卷王模式：敌人被卷到干不动，攻击 / 蓄力 / 技能计时全部暂停（移动仍只是减速）
+      const adt = this.slowT > 0 ? 0 : dt;
 
       if (e.skillKind) {
-        e.skillCd = Math.max(0, e.skillCd - dt);
+        e.skillCd = Math.max(0, e.skillCd - adt);
         if (e.skillT > 0) {
-          e.skillT -= dt;
+          e.skillT -= adt;
           if (e.skillT <= 0) this.castEnemySkill(e);
           if (this.state !== 'playing') return;
         } else if (e.skillCd <= 0 && (e.skillKind === 'nova' || dist < ELITE_SKILL.range)) {
@@ -1414,9 +1712,9 @@ export class Game {
       }
 
       if (e.reach) {
-        e.attackT = Math.max(0, e.attackT - dt);
+        e.attackT = Math.max(0, e.attackT - adt);
         if (e.windup > 0) {
-          e.windup -= dt;
+          e.windup -= adt;
           want.copy(dirN).multiplyScalar(speed * 0.2);
           if (e.windup <= 0) {
             e.duck.kick();
@@ -1442,7 +1740,7 @@ export class Game {
         else if (dist < ideal - 2) want.copy(dirN).multiplyScalar(-speed * 0.7);
         const strafe = new THREE.Vector3(-dirN.z, 0, dirN.x).multiplyScalar(Math.sin(this.t * 0.8 + e.seed) * speed * 0.65);
         want.add(strafe);
-        e.fireT -= dt;
+        e.fireT -= adt;
         visPoint.copy(e.pos); visPoint.y += 0.8;
         if (e.fireT <= 0 && canEngage(dist, t.range, frustum.containsPoint(visPoint)) && !segBlocked(e.pos, p.pos, this.world.colliders)) {
           e.fireT = t.fireInterval * (0.8 + this.rng() * 0.5);
@@ -1474,6 +1772,7 @@ export class Game {
       const pmin = e.radius + 0.5;
       if (pd < pmin && pd > 1e-4) want.add(new THREE.Vector3(pdx / pd, 0, pdz / pd).multiplyScalar((pmin - pd) * 8));
 
+      if (e.rootT > 0) want.set(0, 0, 0);
       e.vel.lerp(want, 1 - Math.exp(-dt * 6));
       e.pos.addScaledVector(e.vel, dt);
       e.pos.x = Math.max(-27, Math.min(27, e.pos.x));
@@ -1555,7 +1854,7 @@ export class Game {
         crit ? '#ff9a3c' : (opts.color || '#ffe28a'));
       if (crit) { this.fx.spark(e.pos.clone().setY(0.9), new THREE.Vector3(0, 1, 0), 8, 0xffa040, 6); this.engine.addShake(0.07); }
     }
-    if (e.hp <= 0) this.killEnemy(e);
+    if (e.hp <= 0) this.killEnemy(e, opts);
     return dmg;
   }
 
@@ -1597,7 +1896,7 @@ export class Game {
     }
   }
 
-  killEnemy(e) {
+  killEnemy(e, opts = {}) {
     if (this.state !== 'playing' || e.dead) return;
     e.dead = true;
     e.duck.die();
@@ -1616,8 +1915,23 @@ export class Game {
     const mods = this.loadout.mods;
     const c = Math.round(coinsFor(e.type, e.elite) * this.loadout.coinMul * (mods.goldRush || 1));
     this.creditCoins(c);
-    this.fx.number(e.pos.clone().setY(e.pos.y + 1.3), `+${c} 金币`, '#ffd95e');
-    this.addXp(Math.round(xpForKill(e.type, e.elite) * this.loadout.xpMul));
+    this.fx.number(e.pos.clone().setY(e.pos.y + 1.3), `+${c} 刀`, '#ffd95e');
+    // 加班：技能范围内击杀按人头结算加班费
+    if (opts.source === 'overtime') {
+      this.creditCoins(SKILL_TUNING.overtimeCoins);
+      this.fx.number(e.pos.clone().setY(e.pos.y + 1.8), `+${SKILL_TUNING.overtimeCoins} 加班费`, '#ffd95e');
+    }
+    // 996：燃烧期间击杀续命，有上限
+    if (this.p.rageT > 0 && this.p.rageExtended < SKILL_TUNING.rageExtendCap) {
+      const ext = Math.min(SKILL_TUNING.rageKillExtend, SKILL_TUNING.rageExtendCap - this.p.rageExtended);
+      this.p.rageT += ext;
+      this.p.rageExtended += ext;
+    }
+    // 卷王模式：敌人干不动了，经验全归我
+    const grind = this.slowT > 0 ? SKILL_TUNING.grindXpMul : 1;
+    const xp = Math.round(xpForKill(e.type, e.elite) * this.loadout.xpMul * grind);
+    this.addXp(xp);
+    if (grind > 1) this.fx.number(e.pos.clone().setY(e.pos.y + 2.2), `卷王经验 ×${grind}`, '#b06fff');
     if (this.loadout.killHeal > 0 && this.p.hp > 0) {
       const before = this.p.hp;
       this.p.hp = Math.min(this.p.maxHp, this.p.hp + this.loadout.killHeal);
@@ -1658,15 +1972,17 @@ export class Game {
 
   /* ---------------- 子弹 ---------------- */
 
-  // 发射时按枪口指向锁定一个敌人：角度最贴合者优先，距离仅作同级 tie-break；范围内无敌人则不锁定（直线飞行）
+  // 只锁定航向左右 60° 内的目标，优先选最贴合航向的敌人。
   lockMissileTarget(b, dir) {
+    const remainingRange = b.range - (b.traveled ?? 0);
     let best = null, bestScore = Infinity;
     for (const e of this.enemies) {
       if (e.dead) continue;
       const dx = e.pos.x - b.pos.x, dz = e.pos.z - b.pos.z;
       const dist = Math.hypot(dx, dz);
-      if (dist > b.range || dist < 1e-3) continue;
+      if (dist > remainingRange || dist < 1e-3) continue;
       const dot = (dx * dir.x + dz * dir.z) / dist;
+      if (dot < 0.5) continue;
       const angle = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
       const score = angle * 1000 + dist;
       if (score < bestScore) { bestScore = score; best = e; }
@@ -1720,11 +2036,11 @@ export class Game {
     return { dir, urgency };
   }
 
-  // 追踪转向：只对发射时锁定的目标生效；未锁定或目标死亡则直线飞行。瞄准预测拦截点并自动避障
+  // 目标被击倒时沿当前航向重新锁定，找不到替补就继续直飞。
   steerMissile(b, dt) {
+    if (b.target?.dead) b.target = this.lockMissileTarget(b, b.vel.clone().setY(0).normalize());
     const e = b.target;
-    if (!e) return; // 未锁定敌人 → 直线飞行
-    if (e.dead) { b.target = null; return; } // 锁定目标死亡 → 解除锁定，转为直线
+    if (!e) return;
     const speed = b.vel.length();
     if (speed < 1e-3) return;
     const cur = b.vel.clone().divideScalar(speed);
@@ -1740,41 +2056,102 @@ export class Game {
     b.vel.copy(cur.applyQuaternion(q).multiplyScalar(speed));
   }
 
-  // 导弹引爆：火球闪光 + 冲击波环 + 四散火星 + 烟团 + 爆炸音 + 震屏
-  missileExplode(pos) {
+  missileExplode(b, directTarget, impactDamage = damageAtDistance(b.dmg, b.traveled, b.attack)) {
+    const pos = b.pos;
     this.fx.flash(pos, 1.2);
-    this.fx.ring(pos, 0xff7040, 2.8);
-    this.fx.spark(pos, new THREE.Vector3(0, 0.8, 0), 26, 0xffa050, 12);
+    this.fx.ring(pos, 0xff7040, MISSILE_BLAST_RADIUS);
+    this.fx.spark(pos, new THREE.Vector3(0, 0.8, 0), 12, 0xffa050, 12);
     this.fx.smoke(pos, 5, 0x6a5a4a, 0.6, 2.4, 0.9);
     this.audio.boom();
     this.engine.addShake(0.3);
+    for (const e of this.enemies) {
+      if (e.dead || e === directTarget) continue;
+      const distance = Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z);
+      if (distance > MISSILE_BLAST_RADIUS) continue;
+      if (!b.countedHit) {
+        this.hits++;
+        b.countedHit = true;
+        this.hud.hitmarker(false);
+      }
+      const splash = impactDamage * (0.65 - 0.35 * distance / MISSILE_BLAST_RADIUS);
+      this.damageEnemy(e, splash, { mods: b.attack?.mods, noProc: true, noCrit: true, color: '#ffb070' });
+    }
+    const visual = new GroundFireVisual(pos, MISSILE_BLAST_RADIUS);
+    this.engine.scene.add(visual);
+    this.missileFires.push({ pos: pos.clone(), visual, elapsed: 0, dps: impactDamage * 0.2, mods: b.attack?.mods });
+  }
+
+  updateMissileFires(dt) {
+    if (this.state !== 'playing' || !this.missileFires.length || dt <= 0) return;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      let damage = 0, mods;
+      for (const fire of this.missileFires) {
+        const distance = Math.hypot(e.pos.x - fire.pos.x, e.pos.z - fire.pos.z);
+        if (distance > MISSILE_BLAST_RADIUS) continue;
+        const ignition = THREE.MathUtils.lerp(FIRST_EMBER_LANDING, LAST_EMBER_LANDING, distance / MISSILE_BLAST_RADIUS);
+        const hotTime = Math.min(fire.elapsed + dt, MISSILE_FIRE_LIFETIME) - Math.max(fire.elapsed, ignition);
+        const burn = fire.dps * Math.max(0, hotTime);
+        // 火区重叠时取本帧最高伤害，连射扩大覆盖范围。
+        if (burn > damage) { damage = burn; mods = fire.mods; }
+      }
+      if (damage > 0) this.damageEnemy(e, damage, { mods, raw: true, noProc: true, silent: true });
+    }
+    for (let i = this.missileFires.length - 1; i >= 0; i--) {
+      const fire = this.missileFires[i];
+      fire.elapsed += dt;
+      const remaining = MISSILE_FIRE_LIFETIME - fire.elapsed;
+      if (remaining <= 0) {
+        this.removeAttackVisual(fire.visual);
+        this.missileFires.splice(i, 1);
+      } else {
+        fire.visual.update(fire.elapsed, remaining);
+      }
+    }
   }
 
   updateBullets(dt) {
     if (this.state !== 'playing') return;
     const p = this.p;
+    const colliders = this.world.colliders;
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
+      const isBubble = b.planId === 'glm';
+      const isDS = b.planId === 'ds';
+      const isBlade = b.planId === 'qwen';
+      const sweepRadius = isBubble ? BUBBLE_RADIUS : isBlade ? QWEN_BLADE_HALF_WIDTH : 0;
+      const heightPad = isBlade ? QWEN_BLADE_HEIGHT_PAD : sweepRadius;
+      const bladeDirection = isBlade ? b.vel.clone().setY(0).normalize() : null;
       b.life -= dt;
       let gone = b.life <= 0;
       if (!gone) {
         if (b.planId === 'claude') this.steerMissile(b, dt);
         const step = b.vel.clone().multiplyScalar(dt);
+        if (isBubble) step.clampLength(0, Math.max(0, b.range - b.traveled));
         const n = Math.min(12, Math.max(1, Math.ceil(step.length() / 0.3)));
         step.divideScalar(n);
+        const stride = step.length();
         for (let s = 0; s < n && !gone; s++) {
-          b.pos.add(step);
-          b.traveled += step.length();
+          const fromX = b.pos.x, fromZ = b.pos.z;
+          const wallT = b.pos.y < 1.8 ? blockerTime(fromX, fromZ, step.x, step.z, colliders) : Infinity;
+          const wall = wallT !== Infinity;
+          const fraction = wall ? wallT : 1;
+          b.pos.addScaledVector(step, fraction);
+          b.traveled += stride * fraction;
           for (const e of this.enemies) {
             if (e.dead || (b.hitSet && b.hitSet.has(e))) continue;
-            const r = e.radius + 0.22;
-            if (Math.hypot(b.pos.x - e.pos.x, b.pos.z - e.pos.z) < r && b.pos.y < 1.7 * e.scale) {
+            const hit = sweepRadius
+              ? b.pos.y >= e.pos.y - heightPad && b.pos.y <= e.pos.y + 1.7 * e.scale + heightPad
+                && (isBlade ? bladeTouchesEnemy(b.pos, stride * fraction, bladeDirection, e)
+                  : segmentTouchesCircle(b.pos.x, b.pos.z, step.x * fraction, step.z * fraction, e.pos.x, e.pos.z, e.radius + sweepRadius))
+              : b.pos.y < 1.7 * e.scale && Math.hypot(b.pos.x - e.pos.x, b.pos.z - e.pos.z) < e.radius + 0.22;
+            if (hit) {
+              if (b.pos.y < 1.8 && blockerTime(fromX, fromZ, e.pos.x - fromX, e.pos.z - fromZ, colliders) !== Infinity) continue;
               const dmg = damageAtDistance(b.dmg, b.traveled, b.attack);
               if (!b.countedHit) { this.hits++; b.countedHit = true; }
               const hitDir = b.vel.clone().normalize().multiplyScalar(-0.4);
               switch (b.planId) {
                 case 'claude':
-                  this.missileExplode(b.pos);
                   this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 7, 3);
                   break;
                 case 'gpt':
@@ -1783,13 +2160,16 @@ export class Game {
                   this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 5, 2.5);
                   break;
                 case 'qwen':
-                  this.fx.spark(b.pos, hitDir, 5, 0xb090ff, 8);
+                  this.fx.bladeShards(b.pos, hitDir, b.color);
                   this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 3, 2);
                   break;
                 case 'glm':
-                  this.fx.spark(b.pos, hitDir, 10, 0x70b0ff, 5);
-                  this.fx.smoke(b.pos, 1, 0x607090, 0.3, 1.4, 0.35);
                   this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 5, 2.5);
+                  break;
+                case 'ds':
+                  this.fx.spark(b.pos, hitDir, 6, b.color, 5);
+                  this.fx.ring(b.pos, b.color, 0.48);
+                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 4, 2);
                   break;
                 default:
                   this.fx.spark(b.pos, hitDir, 7, 0xffd080, 6);
@@ -1800,6 +2180,12 @@ export class Game {
               e.duck.kick();
               this.damageEnemy(e, dmg, { mods: b.attack?.mods });
               this.applyHitMods(e, b.pos.clone(), dmg, b.attack?.mods);
+              if (b.planId === 'claude') this.missileExplode(b, e, dmg);
+              if (isBlade) {
+                if (!b.hitSet) b.hitSet = new Set();
+                b.hitSet.add(e);
+                continue;
+              }
               // 穿甲：记录已命中目标避免同一帧重复判定，穿透次数用尽才消失
               if (b.pierce > 0) {
                 b.pierce--;
@@ -1812,9 +2198,11 @@ export class Game {
               break;
             }
           }
-          if (!gone && b.pos.y < 1.8 && pointBlocked(b.pos.x, b.pos.z, this.world.colliders)) {
-            if (b.planId === 'claude') this.missileExplode(b.pos);
-            else {
+          if (!gone && wall) {
+            if (b.planId === 'claude') this.missileExplode(b);
+            else if (isBlade) this.fx.bladeShards(b.pos, b.vel.clone().normalize().multiplyScalar(-0.4), b.color);
+            else if (isDS) this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.5), 4, b.color, 4);
+            else if (!isBubble) {
               this.fx.spark(b.pos, b.vel.clone().normalize().multiplyScalar(-0.5), 6, 0xffc060, 5);
               this.fx.smoke(b.pos, 1, 0x8a8078, 0.25, 1.4, 0.4);
             }
@@ -1824,12 +2212,15 @@ export class Game {
             const wy = waterSurfaceAt(b.pos.x, b.pos.z);
             if (wy !== null && b.pos.y <= wy + 0.04) {
               // 落水：白色水花，不产生焦痕
-              this.fx.smoke(b.pos, 2, 0xd8ece8, 0.3, 1.5, 0.5);
-              this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 5, 0xbfe8e0, 3);
+              if (!isBubble) {
+                this.fx.smoke(b.pos, 2, 0xd8ece8, 0.3, 1.5, 0.5);
+                this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 5, 0xbfe8e0, 3);
+              }
               gone = true;
             } else if (b.pos.y <= groundHeight(b.pos.x, b.pos.z) + 0.04) {
-              if (b.planId === 'claude') { this.missileExplode(b.pos); this.fx.decal(b.pos, 0.4); }
-              else {
+              if (b.planId === 'claude') { this.missileExplode(b); this.fx.decal(b.pos, 0.4); }
+              else if (isDS) this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, b.color, 3);
+              else if (!isBubble) {
                 this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
                 this.fx.spark(b.pos, new THREE.Vector3(0, 1, 0), 4, 0xc8b080, 3);
                 this.fx.decal(b.pos, 0.28);
@@ -1837,31 +2228,35 @@ export class Game {
               gone = true;
             }
           }
-          if (!gone && b.traveled >= b.range) {
-            this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
-            const wy = waterSurfaceAt(b.pos.x, b.pos.z);
-            this.fx.decal(new THREE.Vector3(b.pos.x, wy !== null ? wy : groundHeight(b.pos.x, b.pos.z), b.pos.z), 0.28);
+          if (!gone && b.traveled >= b.range - (isBubble ? 1e-6 : 0)) {
+            if (!isBubble && !isDS) {
+              this.fx.smoke(b.pos, 2, 0xa08a68, 0.3, 1.5, 0.5);
+              const wy = waterSurfaceAt(b.pos.x, b.pos.z);
+              this.fx.decal(new THREE.Vector3(b.pos.x, wy !== null ? wy : groundHeight(b.pos.x, b.pos.z), b.pos.z), 0.28);
+            }
             gone = true;
           }
         }
       }
       if (gone) {
-        if (b.vis) this.engine.scene.remove(b.vis);
+        if (isBubble) this.fx.ring(b.pos, 0xa4ddff, 0.75);
+        this.removeAttackVisual(b.vis);
         this.bullets.splice(i, 1);
       } else if (b.vis) {
         b.vis.position.copy(b.pos);
-        if (b.planId === 'claude') {
-          b.vis.lookAt(b.pos.clone().add(b.vel));
-          const flame = b.vis.userData.flame;
-          if (flame) { const f = 0.75 + Math.random() * 0.5; flame.scale.set(f, f, 0.7 + Math.random() * 0.7); }
+        if (isBlade) b.vis.rotation.z = Math.sin(b.traveled * 2.5) * 0.19;
+        const tracer = b.vis.userData.tracer;
+        if (tracer) {
+          tracer.visible = b.traveled > 0.06;
+          tracer.scale.z = Math.min(1, b.traveled / DS_TRACER_LENGTH);
         }
-        b.trailT = (b.trailT || 0) + dt;
-        if (b.planId === 'claude' && b.trailT > 0.03) {
-          b.trailT = 0;
-          this.fx.spark(b.pos, new THREE.Vector3((Math.random() - 0.5) * 0.3, 0.2, (Math.random() - 0.5) * 0.3), 2, 0xff8050, 2);
-        } else if (b.planId === 'gpt' && b.trailT > 0.06) {
-          b.trailT = 0;
-          this.fx.spark(b.pos, new THREE.Vector3(0, 0.1, 0), 1, 0x40e8a0, 1.5);
+        if (b.planId === 'claude') {
+          const nozzle = b.vis.advance?.(b.vel, dt, this.engine.camera);
+          b.trailT += dt;
+          if (nozzle && b.trailT >= 0.07) {
+            b.trailT %= 0.07;
+            this.fx.smoke(nozzle, 1, 0xbc9887, 0.23, 1.7, 0.36);
+          }
         }
       }
     }
@@ -1903,7 +2298,7 @@ export class Game {
         this.ebullets.splice(i, 1);
       } else {
         if (!b.spr) {
-          b.spr = this.makeBulletVis(null, 0xff7040, 0.7);
+          b.spr = this.makeBulletVis(null, 0xff7040);
           b.spr.lookAt(b.pos.clone().add(b.vel));
         }
         b.spr.position.copy(b.pos);
@@ -1951,7 +2346,7 @@ export class Game {
         if (loot) {
           this.creditCoins(loot.coins);
           const eff = this.applyLootEffect(loot.effect);
-          this.hud.toast(`拾取 ${loot.label} · +${loot.coins} 金币${eff ? ' · ' + eff : ''}`);
+          this.hud.toast(`拾取 ${loot.label} · +${loot.coins} 刀${eff ? ' · ' + eff : ''}`);
           this.fx.number(pk.mesh.position.clone().setY(pk.mesh.position.y + 0.4), `${loot.label} +${loot.coins}`, '#ffe28a');
         } else if (protection) {
           this.protections[protection.id].push(this.wave + PROTECTION_DURATION);

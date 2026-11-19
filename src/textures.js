@@ -329,6 +329,19 @@ export function sparkSprite() {
   }));
 }
 
+export function bladeShardSprite() {
+  return cached('blade-shard', () => spriteCanvas(32, (ctx) => {
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(5, 27);
+    ctx.lineTo(14, 5);
+    ctx.lineTo(28, 9);
+    ctx.lineTo(19, 16);
+    ctx.closePath();
+    ctx.fill();
+  }));
+}
+
 export function flashSprite() {
   return cached('flash', () => spriteCanvas(128, (ctx, s) => {
     const c = s / 2;
@@ -354,6 +367,19 @@ export function glowSprite() {
     g.addColorStop(0.35, 'rgba(255,255,255,0.4)');
     g.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+  }));
+}
+
+export function laserHaloTexture() {
+  return cached('laser-halo', () => spriteCanvas(32, (ctx, s) => {
+    const halo = ctx.createLinearGradient(0, 0, 0, s);
+    halo.addColorStop(0, 'rgba(255,255,255,0)');
+    halo.addColorStop(0.28, 'rgba(255,255,255,0.12)');
+    halo.addColorStop(0.5, 'rgba(255,255,255,0.75)');
+    halo.addColorStop(0.72, 'rgba(255,255,255,0.12)');
+    halo.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, s, s);
   }));
 }
 
@@ -389,6 +415,58 @@ export function ringSprite() {
 
 // 文字贴图统一在此缓存（text|color|size 为键）：伤害飘字用 64px，头顶名字用 32px。
 // 名字精灵屏幕投影仅 ~23-47px，32px 栅格观感相同、显存约为 1/4。
+// 技能喊话气泡：奶白圆角框 + 向下小尾巴 + 深棕粗体字
+export function shoutTexture(text) {
+  return cached(`shout:${text}`, () => {
+    const size = 32;
+    const font = `900 ${size}px "Yuanti SC","YouYuan","Microsoft YaHei",sans-serif`;
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    ctx.font = font;
+    const tw = Math.ceil(ctx.measureText(text).width);
+    const padX = 20, padY = 9, tail = 11;
+    const w = tw + padX * 2, h = size + padY * 2;
+    c.width = w; c.height = h + tail;
+    ctx.font = font;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#3a2a10'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(2, 2, w - 4, h - 4, 16);
+    ctx.fillStyle = '#fff8e7'; ctx.fill(); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(w / 2 - 14, h - 5); ctx.lineTo(w / 2, h + tail - 2); ctx.lineTo(w / 2 + 14, h - 5);
+    ctx.closePath(); ctx.fillStyle = '#fff8e7'; ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(w / 2 - 14, h - 1); ctx.lineTo(w / 2, h + tail - 2); ctx.lineTo(w / 2 + 14, h - 1);
+    ctx.stroke();
+    ctx.fillStyle = '#3a2a10'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, w / 2, h / 2 + 2);
+    return toTexture(c, { repeat: false });
+  });
+}
+
+export function bubbleTexture() {
+  return cached('bubble', () => {
+    const canvas = makeCanvas(64);
+    const ctx = canvas.getContext('2d');
+    const sheen = ctx.createRadialGradient(29, 29, 8, 32, 32, 29);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.08)');
+    sheen.addColorStop(0.8, 'rgba(255,255,255,0.30)');
+    sheen.addColorStop(1, 'rgba(255,255,255,0.82)');
+    ctx.beginPath();
+    ctx.arc(32, 32, 28, 0, Math.PI * 2);
+    ctx.fillStyle = sheen;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(22, 18, 8, 4, -Math.PI / 5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fill();
+    return toTexture(canvas, { repeat: false });
+  });
+}
+
 export function textTexture(text, color = '#ffe28a', size = 64) {
   return cached(`text:${text}|${color}|${size}`, () => {
     const font = `900 ${size}px "Yuanti SC","YouYuan","Microsoft YaHei",sans-serif`;

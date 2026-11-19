@@ -241,7 +241,7 @@ try {
     if (!g.subscribe('claude')) throw new Error('Claude recovery fixture failed');
     g.nextWave(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 99999;
     window.__padBanRolls = 0; g.banRng = () => { window.__padBanRolls++; return 1; };
-    for (let i = 0; i < 42; i++) { g.p.fireT = 0; if (!g.fire()) throw new Error('Call rejected: ' + i); }
+    for (let i = 0; i < 22; i++) { g.p.fireT = 0; if (!g.fire()) throw new Error('Call rejected: ' + i); }
     g.p.fireT = 0;
     const exhausted = { coins: g.coins, tokens: g.tokens, calls: g.calls, used: g.tokensUsed,
       rolls: window.__padBanRolls, rejected: !g.fire() };
@@ -252,21 +252,24 @@ try {
     const pad = { buttons: Array.from({ length: 17 }, () => ({ pressed: false })), axes: [0, 0, 0, 0] };
     navigator.getGamepads = () => [pad]; g.padPrev = [];
     try {
+      g.aimPoint.copy(e.pos);
       pad.buttons[12].pressed = true; g.pollGamepad();
+      const delayed = !e.dead && g.bombs.length === 1;
+      g.updateBombs(0.6);
       const free = { killed: e.dead, coins: g.coins, calls: g.calls, used: g.tokensUsed,
         rolls: window.__padBanRolls, cooldown: g.skillCd.storm };
       const wallet = g.walletMicros;
       const resumed = { fired: g.fire(), walletBefore: wallet, wallet: g.walletMicros,
         calls: g.calls, rolls: window.__padBanRolls, state: g.state };
-      return { exhausted, free, resumed };
+      return { exhausted, delayed, free, resumed };
     } finally { pad.buttons[12].pressed = false; g.pollGamepad(); navigator.getGamepads = window.__realGetGamepads; }
   })()`);
-  check('V4b', '纯手柄42次Claude调用后剩4.96金币，十字键免费击杀恢复按量射击且不额外抽封号',
-    v4b.exhausted.coins === 4.96 && v4b.exhausted.tokens === 0 && v4b.exhausted.calls === 42
-    && v4b.exhausted.rolls === 42 && v4b.exhausted.rejected && v4b.free.killed && v4b.free.cooldown > 0
-    && v4b.free.calls === 42 && v4b.free.used === v4b.exhausted.used && v4b.free.rolls === 42
-    && v4b.resumed.fired && v4b.resumed.calls === 43 && v4b.resumed.rolls === 43
-    && v4b.resumed.wallet === v4b.resumed.walletBefore - 5_120_000 && v4b.resumed.state === 'playing',
+  check('V4b', '纯手柄 22 次 Claude 调用后剩 4.72 刀，加班炸弹落地击杀后可恢复射击',
+    v4b.exhausted.coins === 4.72 && v4b.exhausted.tokens === 0 && v4b.exhausted.calls === 22
+    && v4b.exhausted.rolls === 22 && v4b.exhausted.rejected && v4b.delayed && v4b.free.killed && v4b.free.cooldown > 0
+    && v4b.free.calls === 22 && v4b.free.used === v4b.exhausted.used && v4b.free.rolls === 22
+    && v4b.resumed.fired && v4b.resumed.calls === 23 && v4b.resumed.rolls === 23
+    && v4b.resumed.wallet === v4b.resumed.walletBefore - 10_240_000 && v4b.resumed.state === 'playing',
     JSON.stringify(v4b));
   await shot('v4b-controller-recovery');
 
@@ -292,7 +295,7 @@ try {
       alertShown: document.getElementById('alertBanner').classList.contains('show'),
       bossWindup: window.__game.enemies.find(e => e.type === 'boss')?.skillT > 0 }))()`);
     check('V5', 'Boss 预警走独立通道，技能提示无法覆盖',
-      warnSeen && v5.bossWindup && v5.alertShown && v5.alert.includes('全图冲击波') && v5.toast.includes('蹲防'),
+      warnSeen && v5.bossWindup && v5.alertShown && v5.alert.includes('全图冲击波') && v5.toast.includes('调休'),
       `toast="${v5.toast}"，alert="${v5.alert}"（独立显示=${v5.alertShown}）`);
     await shot('v5-boss-alert');
   } else check('V5', 'Boss 预警独立通道', false, 'Boss 未出生');
@@ -381,6 +384,7 @@ try {
   // ---------- V9 原换弹卡实际优化每次 Token 用量，向上取整 ----------
   await ensurePlaying();
   const v9 = await ev(`(() => { const g = window.__game; const cards = { ...g.cards };
+    if (g.planId !== 'ds') { g.coins = Math.max(g.coins, 15); g.openWeapons(); g.subscribe('ds'); g.closeWeapons(); }
     window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 99999;
     g.cards.c_reload = 3; g.recomputeLoadout(); g.tokens = 100; g.p.fireT = 0;
     const before = { calls: g.calls, used: g.tokensUsed, wallet: g.walletMicros };
@@ -388,11 +392,11 @@ try {
     const after = { tokens: g.tokens, calls: g.calls, used: g.tokensUsed, wallet: g.walletMicros };
     g.cards = cards; g.recomputeLoadout();
     return { before, after, quote, noReload: !('reloadTime' in g.loadout) && typeof g.audio.reload !== 'function' }; })()`);
-  check('V9', '三层 Token 优化把一次 32 Token 降至 ceil(22.4)=23，调用与扣量一致',
-    v9.quote.tokens === 23 && v9.after.tokens === 77 && v9.after.calls === v9.before.calls + 1
-    && v9.after.used === v9.before.used + 23 && v9.after.wallet === v9.before.wallet && v9.noReload, JSON.stringify(v9));
+  check('V9', '三层 Token 优化把 DS 单次调用从 11 Token 降到 8，调用与扣量一致',
+    v9.quote.tokens === 8 && v9.after.tokens === 92 && v9.after.calls === v9.before.calls + 1
+    && v9.after.used === v9.before.used + 8 && v9.after.wallet === v9.before.wallet && v9.noReload, JSON.stringify(v9));
 
-  // ---------- V10 福利经验应用倍率，加班费改为 18 金币 +12 基础经验 ----------
+  // ---------- V10 福利经验应用倍率，加班费改为 18 刀 +12 基础经验 ----------
   const v10 = await ev(`(() => { const g = window.__game; const cards = { ...g.cards };
     g.cards = { c_ammo: 2, c_xp: 2 }; g.recomputeLoadout();
     window.__resolveDraft(); g.clearField(); g.spawnQueue = []; g.waveState = 'inter'; g.interT = 9999;
@@ -404,7 +408,7 @@ try {
       tokensUnchanged: g.tokens === tokens, meteredMul: g.loadout.meteredCostMul,
       noInventory: !('inv' in g), noReserve: !('reserve' in g.p), left: g.pickups.length };
     g.cards = cards; g.recomputeLoadout(); return result; })()`);
-  check('V10', '绩效/加班费经验均乘 1.5，金币一次到账，不赠送 Token 或旧备弹',
+  check('V10', '绩效/加班费经验均乘 1.5，刀一次到账，不赠送 Token 或旧备弹',
     v10.benefitXp === 63 && v10.benefitMicros === 42_000_000 && v10.tokensUnchanged
     && v10.meteredMul === 0.8 && v10.noInventory && v10.noReserve && v10.left === 0, JSON.stringify(v10));
 
@@ -558,7 +562,7 @@ try {
     window.addEventListener('keydown', window.__observeActivation);
     g.openWeapons(); return 1; })()`);
   const v14 = [];
-  for (const [code, vk, id, price] of [['Space', 32, 'qwen', 45], ['Enter', 13, 'gpt', 60]]) {
+  for (const [code, vk, id, price] of [['Space', 32, 'qwen', 45], ['Enter', 13, 'gpt', 120]]) {
     const before = await ev(`(() => { document.querySelector('#weaponGrid button[data-plan="${id}"]').focus();
       return { coins: window.__game.coins, calls: window.__weaponActivation.calls.length }; })()`);
     await tap(code, vk); await sleep(150);
