@@ -51,6 +51,12 @@ function makeNameSprite(text, color = '#ffffff', height = 0.3) {
   return s;
 }
 
+function setBarFill(sprite, ratio) {
+  const r = Math.max(0, Math.min(1, ratio));
+  sprite.scale.x = 1.42 * r;
+  sprite.position.x = -0.71 * (1 - r);
+}
+
 export class Game {
   constructor(engine, world, hud, audio) {
     this.engine = engine;
@@ -222,10 +228,17 @@ export class Game {
     this.hud.cardBookOpen(false);
   }
 
-  start() {
+  clearInput() {
+    this.keys.clear();
+    this.mouse.down = false;
+    this.mouseFire = false;
+    this.padFire = false;
+  }
+
+  resetRun() {
     if (this.overTimer) { clearTimeout(this.overTimer); this.overTimer = null; }
     this.clearField();
-    this.keys.clear(); this.mouse.down = false; this.mouseFire = false;
+    this.clearInput();
     this.best = this.loadBest();
     this.resetStats();
     this.rebuildPlayerDuck();
@@ -233,6 +246,10 @@ export class Game {
     this.playerDuck.root.rotation.set(0, 0, 0);
     this.playerDuck.root.scale.setScalar(1);
     this.playerDuck.group.position.copy(this.p.pos);
+  }
+
+  start() {
+    this.resetRun();
     this.state = 'playing';
     this.hud.screen(null);
     this.hud.hudOn(true);
@@ -244,17 +261,8 @@ export class Game {
   }
 
   toTitle() {
-    if (this.overTimer) { clearTimeout(this.overTimer); this.overTimer = null; }
     this.state = 'title';
-    this.clearField();
-    this.keys.clear(); this.mouse.down = false; this.mouseFire = false;
-    this.best = this.loadBest();
-    this.resetStats();
-    this.rebuildPlayerDuck();
-    this.playerDuck.deathT = -1;
-    this.playerDuck.root.rotation.set(0, 0, 0);
-    this.playerDuck.root.scale.setScalar(1);
-    this.playerDuck.group.position.set(0, 0, 3);
+    this.resetRun();
     this.playerHpBar.group.visible = false;
     this.hud.weaponsOpen(false);
     this.hud.screen('start');
@@ -266,9 +274,7 @@ export class Game {
     if (this.state !== 'playing') return;
     this.state = 'paused';
     // 清输入状态：切窗后窗外的 keyup/mouseup 到不了页面，避免恢复时自动走火/走路
-    this.keys.clear();
-    this.mouse.down = false;
-    this.mouseFire = false;
+    this.clearInput();
     this.hud.screen('pause');
     this.hud.syncVolume(this.audio);
   }
@@ -313,10 +319,7 @@ export class Game {
   openWeapons() {
     if (this.state !== 'playing') return;
     this.state = 'weapons';
-    this.mouse.down = false;
-    this.mouseFire = false;
-    this.padFire = false;
-    this.keys.clear();
+    this.clearInput();
     this.hud.weaponsOpen(true);
     this.hud.renderWeapons(this);
     this.audio.uiClick();
@@ -324,10 +327,7 @@ export class Game {
 
   closeWeapons() {
     if (this.state !== 'weapons') return;
-    this.keys.clear();
-    this.mouse.down = false;
-    this.mouseFire = false;
-    this.padFire = false;
+    this.clearInput();
     this.hud.weaponsOpen(false);
     if (!this.planId) this.toTitle();
     else this.state = 'playing';
@@ -470,9 +470,7 @@ export class Game {
     if (!draft.length) return false;
     this.cardDraft = draft;
     this.state = 'card';
-    this.keys.clear();
-    this.mouse.down = false;
-    this.mouseFire = false;
+    this.clearInput();
     this.hud.cardOpen(true);
     this.hud.renderCards(this);
     this.audio.cardDeal();
@@ -496,7 +494,7 @@ export class Game {
     if (id === 'g_guardian') this.guardianCd = 0;
     this.syncOrbit();
     this.state = 'playing';
-    this.keys.clear();
+    this.clearInput();
     this.hud.cardOpen(false);
     this.hud.cardBook(this);
     const rar = CARD_RARITIES[c.rarity];
@@ -512,9 +510,7 @@ export class Game {
   openCardBook() {
     if (this.state !== 'playing') return;
     this.state = 'cardbook';
-    this.keys.clear();
-    this.mouse.down = false;
-    this.mouseFire = false;
+    this.clearInput();
     this.hud.cardBookOpen(true);
     this.hud.renderCardBook(this);
     this.audio.uiClick();
@@ -546,18 +542,24 @@ export class Game {
     }
   }
 
+  positionOrbitals(bobAmp = 0) {
+    const R = 1.85;
+    const { x, y, z } = this.p.pos;
+    for (let i = 0; i < this.orbitals.length; i++) {
+      const a = this.orbitT + (i / this.orbitals.length) * Math.PI * 2;
+      const m = this.orbitals[i];
+      m.position.set(x + Math.cos(a) * R, y + 0.75 + (bobAmp ? Math.sin(this.orbitT * 2 + i) * bobAmp : 0), z + Math.sin(a) * R);
+      m.rotation.set(Math.PI / 2, 0, -a);
+    }
+  }
+
   updateOrbit(dt) {
     if (this.state !== 'playing') return;
     const mod = this.loadout.mods.orbit;
     if (!mod || !this.orbitals.length) return;
     this.orbitT += dt * 1.9;
-    const p = this.p;
-    const R = 1.85;
-    for (let i = 0; i < this.orbitals.length; i++) {
-      const a = this.orbitT + (i / this.orbitals.length) * Math.PI * 2;
-      const m = this.orbitals[i];
-      m.position.set(p.pos.x + Math.cos(a) * R, p.pos.y + 0.75 + Math.sin(this.orbitT * 2 + i) * 0.12, p.pos.z + Math.sin(a) * R);
-      m.rotation.set(Math.PI / 2, 0, -a);
+    this.positionOrbitals(0.12);
+    for (const m of this.orbitals) {
       // 接触判定按每秒 dps × dt 结算，命中反馈节流避免刷爆伤害数字
       for (const e of this.enemies) {
         if (e.dead) continue;
@@ -721,12 +723,7 @@ export class Game {
       // 选卡/图鉴时战斗完全冻结，但护卫羽毛仍绕着鸭鸭转，画面不死板
       if (this.orbitals.length) {
         this.orbitT += dt * 1.2;
-        const R = 1.85;
-        for (let i = 0; i < this.orbitals.length; i++) {
-          const a = this.orbitT + (i / this.orbitals.length) * Math.PI * 2;
-          this.orbitals[i].position.set(this.p.pos.x + Math.cos(a) * R, this.p.pos.y + 0.75, this.p.pos.z + Math.sin(a) * R);
-          this.orbitals[i].rotation.set(Math.PI / 2, 0, -a);
-        }
+        this.positionOrbitals();
       }
       return;
     }
@@ -952,19 +949,13 @@ export class Game {
       dash: p.dashT > 0 ? 1 : 0,
     });
 
-    const ratio = Math.max(0, p.hp / p.maxHp);
     this.playerHpBar.group.visible = true;
     this.playerHpBar.group.position.set(p.pos.x, p.pos.y + 1.9, p.pos.z);
-    this.playerHpBar.fill.scale.x = 1.42 * ratio;
-    this.playerHpBar.fill.position.x = -(1.42 * (1 - ratio)) / 2;
+    setBarFill(this.playerHpBar.fill, p.hp / p.maxHp);
     const bar = this.playerHpBar;
     const shOn = p.shield > 0;
     bar.shieldBg.visible = bar.shieldFill.visible = shOn;
-    if (shOn) {
-      const sr = Math.max(0, Math.min(1, p.shield / Math.max(p.shieldMax, 1)));
-      bar.shieldFill.scale.x = 1.42 * sr;
-      bar.shieldFill.position.x = -(1.42 * (1 - sr)) / 2;
-    }
+    if (shOn) setBarFill(bar.shieldFill, p.shield / Math.max(p.shieldMax, 1));
     if (bar.label) bar.label.position.y = bar.nameBaseY + (shOn ? 0.16 : 0);
     this.shieldDome.visible = p.shieldSkillT > 0;
     if (this.shieldDome.visible) {
@@ -1074,10 +1065,6 @@ export class Game {
         this.fx.flash(origin, 0.3, color);
         this.engine.addShake(0.09);
         break;
-      default:
-        this.fx.flash(origin, 0.22);
-        this.fx.smoke(origin, 1, 0x8a8078, 0.22, 1.6, 0.45);
-        this.engine.addShake(0.09);
     }
     this.playerDuck.kick();
     this.audio.shoot();
@@ -1223,10 +1210,7 @@ export class Game {
     this.state = 'over';
     const p = this.p;
     p.hp = 0;
-    this.keys.clear();
-    this.mouse.down = false;
-    this.mouseFire = false;
-    this.padFire = false;
+    this.clearInput();
     this.playerDuck.die();
     this.playerDuck.setRage(false);
     this.playerHpBar.group.visible = false;
@@ -1613,11 +1597,9 @@ export class Game {
         dash: e.windup > 0 || e.skillT > 0 ? 0.5 : 0,
       });
       if (e.hpBar) {
-        const ratio = Math.max(0, e.hp / e.maxHp);
         e.hpBar.group.visible = true;
         e.hpBar.group.position.set(e.pos.x, e.pos.y + 1.75 * e.scale, e.pos.z);
-        e.hpBar.fill.scale.x = 1.42 * ratio;
-        e.hpBar.fill.position.x = -(1.42 * (1 - ratio)) / 2;
+        setBarFill(e.hpBar.fill, e.hp / e.maxHp);
       }
     }
     // 清理死亡
@@ -1979,11 +1961,6 @@ export class Game {
               switch (b.planId) {
                 case 'claude':
                   this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 7, 3);
-                  break;
-                case 'gpt':
-                  this.fx.spark(b.pos, hitDir, 9, 0x40e8a0, 7);
-                  this.fx.ring(b.pos, 0x30d890, 1.2);
-                  this.fx.feathers(b.pos, PALETTES[ENEMY_TYPES[e.type].palette].body, 5, 2.5);
                   break;
                 case 'qwen':
                   this.fx.bladeShards(b.pos, hitDir, b.color);

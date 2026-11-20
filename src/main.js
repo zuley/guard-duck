@@ -38,15 +38,14 @@ document.getElementById('startBtn').addEventListener('click', () => {
 document.getElementById('resumeBtn').addEventListener('click', () => {
   audio.uiClick(); game.resume();
 });
-document.getElementById('quitBtn').addEventListener('click', () => {
-  audio.uiClick(); game.toTitle();
-});
 document.getElementById('retryBtn').addEventListener('click', () => {
   audio.uiClick(); game.start();
 });
-document.getElementById('titleBtn').addEventListener('click', () => {
-  audio.uiClick(); game.toTitle();
-});
+for (const id of ['quitBtn', 'titleBtn']) {
+  document.getElementById(id).addEventListener('click', () => {
+    audio.uiClick(); game.toTitle();
+  });
+}
 const volSlider = document.getElementById('volumeSlider');
 volSlider.addEventListener('input', () => {
   audio.init();
@@ -66,6 +65,11 @@ document.getElementById('weaponClose').addEventListener('click', () => {
 document.getElementById('cardBookClose').addEventListener('click', () => {
   game.closeCardBook();
 });
+
+const arrowNav = (code) => [
+  code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0,
+  code === 'ArrowDown' ? 1 : code === 'ArrowUp' ? -1 : 0,
+];
 
 window.addEventListener('keydown', (e) => {
   // 一次按下只触发一次动作；关面板/选卡后长按的空格、数字键不能变成冲刺或技能。
@@ -119,10 +123,7 @@ window.addEventListener('keydown', (e) => {
   }
   // 已显示的结算页保留按钮原生 Enter/Space；方向键只移动焦点，不重新显示/抢焦点。
   if (game.state === 'over') {
-    if (e.code.startsWith('Arrow')) {
-      game.menuNavigate(e.code === 'ArrowRight' ? 1 : e.code === 'ArrowLeft' ? -1 : 0,
-        e.code === 'ArrowDown' ? 1 : e.code === 'ArrowUp' ? -1 : 0);
-    }
+    if (e.code.startsWith('Arrow')) game.menuNavigate(...arrowNav(e.code));
     return;
   }
   if (game.state === 'title') {
@@ -141,8 +142,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyB' && game.state === 'weapons') game.closeWeapons();
     else if (e.code === 'KeyT' && game.state === 'cardbook') game.closeCardBook();
     else if (e.code.startsWith('Arrow') && document.activeElement?.type !== 'range') {
-      game.menuNavigate(e.code === 'ArrowRight' ? 1 : e.code === 'ArrowLeft' ? -1 : 0,
-        e.code === 'ArrowDown' ? 1 : e.code === 'ArrowUp' ? -1 : 0);
+      game.menuNavigate(...arrowNav(e.code));
     }
     return;
   }

@@ -413,13 +413,15 @@ export function ringSprite() {
   }));
 }
 
+const UI_FONT = '"Yuanti SC","YouYuan","Microsoft YaHei",sans-serif';
+
 // 文字贴图统一在此缓存（text|color|size 为键）：伤害飘字用 64px，头顶名字用 32px。
 // 名字精灵屏幕投影仅 ~23-47px，32px 栅格观感相同、显存约为 1/4。
 // 技能喊话气泡：奶白圆角框 + 向下小尾巴 + 深棕粗体字
 export function shoutTexture(text) {
   return cached(`shout:${text}`, () => {
     const size = 32;
-    const font = `900 ${size}px "Yuanti SC","YouYuan","Microsoft YaHei",sans-serif`;
+    const font = `900 ${size}px ${UI_FONT}`;
     const c = document.createElement('canvas');
     const ctx = c.getContext('2d');
     ctx.font = font;
@@ -469,7 +471,7 @@ export function bubbleTexture() {
 
 export function textTexture(text, color = '#ffe28a', size = 64) {
   return cached(`text:${text}|${color}|${size}`, () => {
-    const font = `900 ${size}px "Yuanti SC","YouYuan","Microsoft YaHei",sans-serif`;
+    const font = `900 ${size}px ${UI_FONT}`;
     const c = document.createElement('canvas');
     const ctx = c.getContext('2d');
     ctx.font = font;

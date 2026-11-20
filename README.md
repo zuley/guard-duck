@@ -14,7 +14,7 @@
 ```bash
 npm install          # 网络受限时可用: npm install --registry=https://mirrors.cloud.tencent.com/npm/
 npm run dev          # http://127.0.0.1:5173
-npm run build        # 产出 dist/
+npm run build        # 产出单文件 dist/index.html
 npm test             # Vitest 规则 / 订阅账本 / 拾取资源单测
 node scripts/e2e.mjs # 无头 Chrome 真实键鼠端到端（含截图）
 node scripts/playtest.mjs # 输入 / 手柄 / 订阅与 Token / 纪录 / 资源回归验证

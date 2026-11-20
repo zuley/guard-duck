@@ -6,6 +6,12 @@ const _botProj = new THREE.Vector3();
 const _botDir = new THREE.Vector3();
 const _botMove = new THREE.Vector3();
 
+function applyMoveAxes(keys, x, z) {
+  for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) keys.delete(c);
+  if (x > 0.35) keys.add('KeyD'); else if (x < -0.35) keys.add('KeyA');
+  if (z > 0.35) keys.add('KeyS'); else if (z < -0.35) keys.add('KeyW');
+}
+
 // 菜单手柄导航：方向键/D-pad 移动焦点，A 确认；焦点环复用 :focus 样式
 export function menuFocusables(game) {
   const sel = {
@@ -60,11 +66,7 @@ export function pollGamepad(game) {
   } else if (game.state === 'playing') {
     // 手柄与键鼠共存：摇杆有输入才接管移动，扳机与鼠标左键并联，互不清零
     const k = game.keys;
-    if (lx || ly) {
-      for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) k.delete(c);
-      if (lx > 0.35) k.add('KeyD'); else if (lx < -0.35) k.add('KeyA');
-      if (ly > 0.35) k.add('KeyS'); else if (ly < -0.35) k.add('KeyW');
-    }
+    if (lx || ly) applyMoveAxes(k, lx, ly);
     game.padAim = (rx || ry) ? { x: rx, z: ry } : null;
     game.padFire = btn(7) || btn(6);
     game.mouse.down = game.mouseFire || game.padFire;
@@ -137,7 +139,6 @@ export function botControl(game) {
   else _botMove.set(-_botDir.z, 0, _botDir.x);
   _botMove.x -= p.pos.x / 22; _botMove.z -= p.pos.z / 22;
   if (_botMove.lengthSq() > 1e-6) _botMove.normalize();
-  if (_botMove.x > 0.35) k.add('KeyD'); else if (_botMove.x < -0.35) k.add('KeyA');
-  if (_botMove.z > 0.35) k.add('KeyS'); else if (_botMove.z < -0.35) k.add('KeyW');
+  applyMoveAxes(k, _botMove.x, _botMove.z);
   if (nd < 3.2 && p.dashCd <= 0) k.add('Space');
 }

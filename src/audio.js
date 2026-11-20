@@ -2,8 +2,6 @@ export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.master = null;
-    this.ambientNodes = [];
-    this.ambientTimers = [];
     this.musicTimer = null;
     this.musicGain = null;
     this.volume = 0.75;
@@ -248,7 +246,6 @@ export class AudioEngine {
     lfo2.connect(lfo2G); lfo2G.connect(wg.gain);
     wind.connect(wf); wf.connect(wg); wg.connect(this.master);
     wind.start(); lfo.start(); lfo2.start();
-    this.ambientNodes.push(wind, lfo, lfo2);
 
     const cricket = () => {
       if (!this.ctx) return;
@@ -262,15 +259,8 @@ export class AudioEngine {
       this._tone({ type: 'sine', f0: f, f1: f * 1.35, dur: 0.12, gain: 0.02 });
       this._tone({ type: 'sine', f0: f * 1.2, f1: f * 0.85, dur: 0.14, gain: 0.018, delay: 0.15 });
     };
-    this.ambientTimers.push(setInterval(cricket, 2600));
-    this.ambientTimers.push(setInterval(() => { if (Math.random() < 0.5) bird(); }, 8000));
-  }
-
-  stopAmbient() {
-    this.ambientTimers.forEach(clearInterval);
-    this.ambientTimers = [];
-    this.ambientNodes.forEach((n) => { try { n.stop(); } catch { /* already stopped */ } });
-    this.ambientNodes = [];
+    setInterval(cricket, 2600);
+    setInterval(() => { if (Math.random() < 0.5) bird(); }, 8000);
   }
 
   startMusic() {

@@ -8,6 +8,7 @@ const $ = (id) => document.getElementById(id);
 const count = (n) => Number(n).toLocaleString('zh-CN');
 const statCoinFormat = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hex = (color) => '#' + color.toString(16).padStart(6, '0');
+const fmtTime = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 
 function cardDescription(card, level, planId) {
   if (planId === 'qwen' && card.id === 'g_multishot') return 'Qwen 每次固定发射一条半月刀，切换武器后此卡生效。';
@@ -73,7 +74,7 @@ export class HUD {
       protectionCounts: $('protectionCounts'), weaponName: $('weaponName'), gunIcon: $('gunIcon'),
       killfeed: $('killfeed'), toast: $('toast'), alert: $('alertBanner'),
       crosshair: $('crosshair'), hitmarker: $('hitmarker'),
-      dmg: $('dmgVignette'), low: $('lowVignette'), flash: $('flash'),
+      dmg: $('dmgVignette'), low: $('lowVignette'),
       start: $('startScreen'), pause: $('pauseScreen'), over: $('gameoverScreen'),
       resWave: $('resWave'), resKills: $('resKills'), resScore: $('resScore'), resAcc: $('resAcc'),
       fps: $('fps'), loading: $('loading'),
@@ -102,14 +103,6 @@ export class HUD {
     this._protectionRefs = new Map();
     this._cache = {};
     this.cross = { x: innerWidth / 2, y: innerHeight / 2 };
-    if (this.el.crosshair) {
-      this._crossParts = {
-        t: this.el.crosshair.querySelector('.t'),
-        b: this.el.crosshair.querySelector('.b'),
-        l: this.el.crosshair.querySelector('.l'),
-        r: this.el.crosshair.querySelector('.r'),
-      };
-    }
   }
 
   loadingDone() { this.el.loading.classList.add('hidden'); }
@@ -121,7 +114,7 @@ export class HUD {
     const low = pct < 35;
     const lowOn = low && pct > 0;
     const text = String(Math.ceil(Math.max(0, v)));
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     if (c.hpW !== width) { c.hpW = width; this.el.hpFill.style.width = width; }
     if (c.hpLow !== low) { c.hpLow = low; this.el.hpFill.classList.toggle('low', low); }
     if (c.hpTxt !== text) { c.hpTxt = text; this.el.hpText.textContent = text; }
@@ -130,12 +123,12 @@ export class HUD {
 
   dash(t) {
     const width = Math.min(1, Math.max(0, t)) * 100 + '%';
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     if (c.dashW !== width) { c.dashW = width; this.el.dashFill.style.width = width; }
   }
 
   subscription(game) {
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     const plan = getPlan(game.planId);
     const quote = game.usageQuote();
     const metered = !!plan && (game.subscriptionStatus === 'metered' || game.tokens === 0);
@@ -203,20 +196,19 @@ export class HUD {
   }
 
   stats(wave, kills, score, time) {
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     if (c.wave !== wave) { c.wave = wave; this.el.statWave.textContent = wave; }
     if (c.kills !== kills) { c.kills = kills; this.el.statKills.textContent = kills; }
     if (c.score !== score) { c.score = score; this.el.statScore.textContent = score; }
     const sec = Math.floor(time);
     if (c.sec !== sec) {
       c.sec = sec;
-      const m = Math.floor(sec / 60), s = sec % 60;
-      this.el.statTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
+      this.el.statTime.textContent = fmtTime(sec);
     }
   }
 
   coins(v) {
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     const num = Number(v);
     if (c.coins !== num) {
       c.coins = num;
@@ -225,7 +217,7 @@ export class HUD {
   }
 
   remain(v) {
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     if (c.remain !== v) { c.remain = v; this.el.statRemain.textContent = v; }
   }
 
@@ -253,7 +245,7 @@ export class HUD {
   }
 
   growth(level, xp, xpNeed, cardCount) {
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     if (c.level !== level) { c.level = level; this.el.levelBadge.textContent = 'Lv.' + level; }
     const xpW = Math.min(1, xp / xpNeed) * 100 + '%';
     if (c.xpW !== xpW) { c.xpW = xpW; this.el.xpFill.style.width = xpW; }
@@ -262,8 +254,8 @@ export class HUD {
       c.xpFloor = xpFloor; c.xpNeed = xpNeed;
       this.el.xpText.textContent = `${xpFloor} / ${xpNeed}`;
     }
-    if (this._cardCount !== cardCount) {
-      this._cardCount = cardCount;
+    if (c.cardCount !== cardCount) {
+      c.cardCount = cardCount;
       this.el.cardChip.textContent = cardCount;
       this.el.cardChip.classList.toggle('has', cardCount > 0);
     }
@@ -286,7 +278,7 @@ export class HUD {
   }
 
   shield(v, max, t) {
-    const c = this._cache || (this._cache = {});
+    const c = (this._cache ??= {});
     const on = t > 0 && v > 0;
     const width = (on ? Math.min(1, v / max) * 100 : 0) + '%';
     if (c.shOn !== on) { c.shOn = on; this.el.shieldBar.classList.toggle('on', on); }
@@ -399,8 +391,7 @@ export class HUD {
       foot.append(lv, key);
       el.append(badge, art, name, tag, desc, pips, foot);
       el.addEventListener('click', () => game.pickCard(card.id));
-      el.addEventListener('mouseenter', () => { el.classList.add('hover'); game.audio.uiHover(); });
-      el.addEventListener('mouseleave', () => el.classList.remove('hover'));
+      el.addEventListener('mouseenter', () => game.audio.uiHover());
       row.appendChild(el);
     });
     this.cardBook(game);
@@ -634,7 +625,7 @@ export class HUD {
   crosshair(x, y, spreadPx, visible) {
     this.cross.x = x; this.cross.y = y;
     const c = this.el.crosshair;
-    const cache = this._cache || (this._cache = {});
+    const cache = (this._cache ??= {});
     const disp = visible ? 'block' : 'none';
     if (cache.chDisp !== disp) { cache.chDisp = disp; c.style.display = disp; }
     if (!visible) return;
@@ -642,10 +633,10 @@ export class HUD {
     const g = spreadPx;
     if (cache.chGap !== g) {
       cache.chGap = g;
-      const parts = this._crossParts || {
+      const parts = (this._crossParts ??= {
         t: c.querySelector('.t'), b: c.querySelector('.b'),
         l: c.querySelector('.l'), r: c.querySelector('.r'),
-      };
+      });
       parts.t.style.transform = `translateY(${-g - 9}px)`;
       parts.b.style.transform = `translateY(${g}px)`;
       parts.l.style.transform = `translateX(${-g - 9}px)`;
@@ -683,8 +674,7 @@ export class HUD {
     this.el.resKills.textContent = kills;
     this.el.resScore.textContent = score;
     this.el.resAcc.textContent = Math.round(acc * 100) + '%';
-    const m = Math.floor(time / 60), s = Math.floor(time % 60);
-    this.el.resTime.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    this.el.resTime.textContent = fmtTime(time);
     this.el.resCoins.textContent = formatCoins(coins);
     this.el.resBest.textContent = best;
     this.el.resCalls.textContent = count(calls);

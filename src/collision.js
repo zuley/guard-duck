@@ -18,13 +18,7 @@ export function segBlocked(a, b, colliders) {
   const steps = 10;
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
-    const x = a.x + (b.x - a.x) * t;
-    const z = a.z + (b.z - a.z) * t;
-    for (const c of colliders) {
-      if (c.hx !== undefined) {
-        if (Math.abs(x - c.x) < c.hx && Math.abs(z - c.z) < c.hz) return true;
-      } else if (Math.hypot(x - c.x, z - c.z) < c.r) return true;
-    }
+    if (pointBlocked(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t, colliders)) return true;
   }
   return false;
 }

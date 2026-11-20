@@ -64,14 +64,11 @@ body {
 .tokenNums small { font-size: 12px; color: rgba(255,255,255,.72); }
 #usageHint { margin-top: 5px; font-size: 12px; line-height: 1.5; color: rgba(255,255,255,.82); overflow-wrap: anywhere; }
 #usageHint.blocked { color: #ffb0a1; }
-.protectionCounts { display: flex; flex-wrap: wrap; gap: 7px 12px; }
 #protectionCounts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 9px; margin-top: 8px; }
-.protectionChip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; line-height: 1.5; color: rgba(255,255,255,.7); }
+.protectionChip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.7); }
 .protectionChip.held { color: #fff0c7; }
-.protectionIcon { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--protection-color); color: var(--protection-color); font-style: normal; font-weight: 800; font-size: 11px; }
+.protectionIcon { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--protection-color); color: var(--protection-color); font-style: normal; font-weight: 800; font-size: 10px; }
 .protectionCount { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-#protectionCounts .protectionChip { font-size: 11px; }
-#protectionCounts .protectionIcon { min-width: 18px; height: 18px; font-size: 10px; }
 
 #hintPanel { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; font-size: 10px; letter-spacing: .06em; color: rgba(255,255,255,.5); line-height: 1.7; }
 #hintPanel b { color: var(--duck-yellow); font-weight: 700; background: rgba(255,255,255,.1); border-radius: 4px; padding: 0 4px; margin-right: 2px; }
@@ -93,10 +90,8 @@ body {
 #crosshair { position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 5; }
 #crosshair i { position: absolute; background: #fff; box-shadow: 0 0 6px rgba(0,0,0,.8), 0 0 3px rgba(255,217,94,.9); border-radius: 2px; }
 #crosshair .dot { width: 4px; height: 4px; left: -2px; top: -2px; border-radius: 50%; background: var(--duck-yellow); }
-#crosshair .t { width: 2px; height: 9px; left: -1px; }
-#crosshair .b { width: 2px; height: 9px; left: -1px; }
-#crosshair .l { width: 9px; height: 2px; top: -1px; }
-#crosshair .r { width: 9px; height: 2px; top: -1px; }
+#crosshair .t, #crosshair .b { width: 2px; height: 9px; left: -1px; }
+#crosshair .l, #crosshair .r { width: 9px; height: 2px; top: -1px; }
 #hitmarker { position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 6; opacity: 0; }
 #hitmarker i { position: absolute; width: 3px; height: 10px; background: #fff; border-radius: 2px; box-shadow: 0 0 6px rgba(255,80,60,.9); }
 #hitmarker.kill i { background: var(--danger); height: 13px; }
@@ -106,7 +101,6 @@ body {
 #lowVignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(180,10,5,.45) 100%); }
 #lowVignette.on { animation: lowPulse 1.1s ease-in-out infinite; }
 @keyframes lowPulse { 0%,100% { opacity: .25; } 50% { opacity: .75; } }
-#flash { position: fixed; inset: 0; pointer-events: none; background: #fff; opacity: 0; }
 
 /* 出怪门威胁预警 */
 .threat { position: fixed; width: 0; height: 0; z-index: 4; pointer-events: none; animation: threatFade 1.4s ease-out forwards; }
@@ -280,7 +274,6 @@ h1.title {
   0%,100% { box-shadow: 0 12px 34px rgba(0,0,0,.6), 0 0 18px rgba(255,198,58,.35); }
   50% { box-shadow: 0 12px 34px rgba(0,0,0,.6), 0 0 42px rgba(255,198,58,.75); }
 }
-.pickCard.rare { border-style: solid; }
 .rarBadge {
   position: absolute; top: -11px; left: 50%; transform: translateX(-50%);
   font-size: 10px; font-weight: 900; letter-spacing: .28em; padding: 3px 14px; border-radius: 999px;
